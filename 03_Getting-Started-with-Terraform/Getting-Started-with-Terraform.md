@@ -26,7 +26,15 @@ resource "local_file" "my_file" {
 }
 ```
 
+![HCL-SYNTAX](../Images/HCL-SYNTAX.png)
+
 This uses the `local` provider's `local_file` resource to create `Automate.txt` with the given content.
+
+> **Provider documentation:**
+> - [Terraform Registry — Browse Providers](https://registry.terraform.io/browse/providers)
+> - [`hashicorp/local` provider docs](https://registry.terraform.io/providers/hashicorp/local/latest/docs)
+>   - [`local_file` resource](https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/file)
+>   - [`local_sensitive_file` resource](https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/sensitive_file)
 
 ### 2. Terraform Workflow
 
