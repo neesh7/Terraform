@@ -79,3 +79,13 @@ variable "pet_details" {
   default     = ["cat", 5, true]
   description = "Tuple of pet name, age, and vaccination status"
 }
+variable "prefix" {
+  default = "MR."
+  type = string
+  
+}
+variable "separator" {
+  default = "."
+  type = string
+  
+}
