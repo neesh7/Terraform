@@ -21,11 +21,19 @@ output "primary_region_instance" {
 output "kind" {
   value = var.sku_settings.kind
 }
-
-# outputing from modules declared in main.tf
-output "my_random_module" {
-  value = module.my_random_module.random_string
-}
-output "charlie" {
-  value = module.charlie.random_string
+# output "random_string" {
+#   value = module.regionA.random_string
+# }
+# output "regionA" {
+#   value = module.regional_stamp[0].name
+# }
+# output "regionB" {
+#   value = module.regional_stamp[1].name
+# }
+# use this when using maps
+output "regionA" {
+  value = module.regional_stamp["foo"].name
+  }
+output "regionB" {
+  value = module.regional_stamp["bar"].name
 }
