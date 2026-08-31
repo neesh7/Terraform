@@ -16,4 +16,4 @@ resource "local_file" "my-pet" {
     # depends_on = [ random_pet.my-pet ] # explicit dependency
 }
 
-# Basically output from one resource is use in another resource inputs
+# Basically output from one resource is used in another resource inputs

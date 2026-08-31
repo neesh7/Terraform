@@ -22,3 +22,6 @@
 20. using Count and foreach on Terraform modules
 21. Terraform consoles
 22. Terraform Meta Arguments
+------------------- Lab 04 -------------------------------
+23. Create resources in azure
+24. Proper naming convention

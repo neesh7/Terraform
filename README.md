@@ -99,3 +99,5 @@ terraform plan          # preview changes (dry-run)
 terraform apply         # apply changes
 terraform destroy       # tear down managed infrastructure
 ```
+## HCL SYNTAX
+![Challenges](Images/HCL-SYNTAX.png)

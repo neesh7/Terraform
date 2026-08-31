@@ -7,4 +7,4 @@ resource "local_file" "krill" {
     filename = "/root/krill"
     content = "krill"
 }
-# Resource called whale should depend on krill but do not use reference expressions.
+# Resource called 'whale' should depend on 'krill' but do not use reference expressions.
