@@ -6,7 +6,7 @@
 5. output variables
 6. commands
 7. string interpolation
-8. Definig your required provider version
+8. Definig your required provider version - versions.tf
 9. Referancing resource output
 10. Default Input variables 
 11. Sensetive Input and Output Variables
