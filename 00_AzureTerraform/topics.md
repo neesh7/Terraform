@@ -25,3 +25,4 @@
 ------------------- Lab 04 -------------------------------
 23. Create resources in azure
 24. Proper naming convention
+25. Setting up Provider for azure terraform

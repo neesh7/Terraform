@@ -475,6 +475,172 @@ resource "aws_instance" "cluster" {
 }
 ```
 
+### 3.5 Deep Dive: `count` vs `for_each` — Which to Use Where
+
+**The core idea**: Both are **meta-arguments** that let one `resource`/`module` block create *multiple instances*. The difference is how Terraform **addresses** those instances in state.
+
+| | `count` | `for_each` |
+|---|---|---|
+| Takes | a number (often `length(list)`) | a **map** or a **set of strings** |
+| Instance address | `res.name[0]`, `[1]`, `[2]` … (integer index) | `res.name["key"]` (string key) |
+| Iterator object | `count.index` | `each.key`, `each.value` |
+| Identity based on | **position** in the list | **the key** |
+
+That last row is the whole ballgame.
+
+#### 3.5.1 `count` + `list`
+
+```hcl
+variable "users" {
+  default = ["alice", "bob", "carol"]
+}
+
+resource "azurerm_resource_group" "this" {
+  count    = length(var.users)
+  name     = "rg-${var.users[count.index]}"
+  location = "eastus"
+}
+```
+
+Creates `...this[0]` (alice), `...this[1]` (bob), `...this[2]` (carol).
+
+**The problem**: state is keyed by **index**, not value. If you remove `"alice"`:
+
+```hcl
+default = ["bob", "carol"]
+```
+
+- `[0]` alice → bob  → **Terraform replaces** instance 0
+- `[1]` bob → carol → **replaces** instance 1
+- `[2]` carol → gone → **destroys** instance 2
+
+One deletion from the front/middle cascades destroy/recreate onto everything after it. Harmless for stateless things; a disaster for databases, disks, or anything stateful.
+
+➡️ `count` is safe with a list only when the list is **append-only** (you only ever add to the end).
+
+#### 3.5.2 `for_each` + `map`
+
+```hcl
+variable "users" {
+  default = {
+    alice = { role = "admin",     dept = "eng" }
+    bob   = { role = "developer", dept = "eng" }
+    carol = { role = "readonly",  dept = "fin" }
+  }
+}
+
+resource "azurerm_resource_group" "this" {
+  for_each = var.users
+  name     = "rg-${each.key}"
+  location = "eastus"
+  tags = {
+    role = each.value.role
+    dept = each.value.dept
+  }
+}
+```
+
+Creates `...this["alice"]`, `...this["bob"]`, `...this["carol"]`.
+
+Remove `bob` from the map → Terraform destroys **only** `...this["bob"]`. Alice and carol are untouched because their keys didn't change. **This is why `for_each` is the modern default.**
+
+#### 3.5.3 `for_each` + set of strings
+
+If you only have names (no per-item config), convert the list to a set:
+
+```hcl
+variable "users" {
+  default = ["alice", "bob", "carol"]
+}
+
+resource "azurerm_resource_group" "this" {
+  for_each = toset(var.users)
+  name     = "rg-${each.value}"   # with a set, each.key == each.value
+  location = "eastus"
+}
+```
+
+Instances are keyed `["alice"]`, `["bob"]`, `["carol"]` — value-stable, so removals are surgical.
+
+#### 3.5.4 Which to use where
+
+**Default to `for_each`.** Reach for `count` only in these cases:
+
+| Situation | Use |
+|---|---|
+| N identical things where identity doesn't matter | `count` |
+| Conditional single resource: create it or don't | `count = var.enabled ? 1 : 0` |
+| Each instance needs its own distinct config / name | `for_each` (map) |
+| Instances must survive siblings being added/removed | `for_each` |
+| Source data is already a map | `for_each` |
+| Source data is a list of unique strings | `for_each` + `toset()` |
+| Source data is a list of **objects** | `for_each` over `{ for o in list : o.name => o }` |
+
+#### 3.5.5 The conditional idiom (count's best use)
+
+```hcl
+resource "azurerm_public_ip" "bastion" {
+  count               = var.create_bastion ? 1 : 0
+  name                = "pip-bastion"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  allocation_method   = "Static"
+}
+
+# reference safely:
+# one(azurerm_public_ip.bastion[*].id)   → the id, or null if none
+```
+
+Newer style prefers `for_each` even here:
+
+```hcl
+resource "azurerm_public_ip" "bastion" {
+  for_each            = var.create_bastion ? { enabled = true } : {}
+  name                = "pip-bastion"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  allocation_method   = "Static"
+}
+```
+
+#### 3.5.6 Converting a list of objects to a map for `for_each`
+
+`for_each` needs unique keys, so key on a stable unique field:
+
+```hcl
+variable "rules" {
+  default = [
+    { name = "http",  port = 80 },
+    { name = "https", port = 443 },
+  ]
+}
+
+resource "azurerm_network_security_rule" "this" {
+  for_each                = { for r in var.rules : r.name => r }
+  name                    = each.key
+  destination_port_range  = each.value.port
+  # ...
+}
+```
+
+#### 3.5.7 Referencing all instances
+
+```hcl
+# count → splat expression, returns a list
+azurerm_resource_group.this[*].id
+
+# for_each → values() / keys(), or a for expression
+values(azurerm_resource_group.this)[*].id
+[for g in azurerm_resource_group.this : g.id]
+keys(azurerm_resource_group.this)          # the set of keys
+```
+
+#### 3.5.8 Rule of thumb
+
+- **`count`** = "give me N of these" — position-based; good for conditionals and truly interchangeable instances.
+- **`for_each`** = "give me one per entry in this map/set" — key-based; stable under change; needed whenever instances have identity.
+- If unsure, use `for_each`. The only cost is producing a map/set instead of a list.
+
 **Where to practice**: [02-Lab-InputVariables/main.tf](02-Lab-InputVariables/main.tf)
 
 ---
@@ -1968,7 +2134,7 @@ Before deploying to production, ensure:
 
 ---
 
-**Last Updated**: 2026-09-04  
+**Last Updated**: 2026-09-06  
 **Repository**: d:\Codes\Terraform\00_AzureTerraform
 
 ---

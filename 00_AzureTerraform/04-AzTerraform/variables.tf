@@ -1,3 +1,4 @@
+# In this file we declare our input variables
 variable "application_name" {
   type = string
 }
