@@ -25,18 +25,19 @@ resource "azurerm_storage_account" "main" {
   tags = {
     environment = "staging"
   }
+  # No depends_on needed: name references random_string_suffix.result above,
+  # which is an implicit dependency Terraform already orders correctly.
 }
 # terraform workspace new dev
 # terraform workspace list
+
+# Step 3 - Setting up blob container because we need this to store our tfstate files
 resource "azurerm_storage_container" "tfstate" {
   name                  = "tfstate"
   storage_account_id    = azurerm_storage_account.main.id
   container_access_type = "private"
 }
-
-resource "azurerm_storage_blob" "tfstatefile" {
-  name                 = "tfstate"
-  storage_container_id = azurerm_storage_container.tfstate.id
-  type                 = "Block"
-  source               = "terraform.tfstate"
-}
+# Note : use right resource Abbreviation to name your azure resources
+# The state blob itself is NOT created here — the azurerm backend in downstream
+# configs creates and manages it via the `key` value. Uploading terraform.tfstate
+# as a blob from this config is circular and locks against the running apply.

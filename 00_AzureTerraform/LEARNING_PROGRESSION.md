@@ -354,6 +354,8 @@ locals {
 ### 2.6 Commands Involving Variables
 
 ```bash
+# Setting up shortcut
+# alias tf="terraform
 # Use default values (from variable defaults or .tfvars)
 terraform plan
 
@@ -962,6 +964,60 @@ terraform apply
 - Workspaces can be tricky with remote state backends
 - Easy to accidentally deploy prod from dev code
 
+### 4.5.3.1 Workspaces Isolate State, Not Configuration
+
+Correct — that's exactly the limitation. **Workspaces isolate state, not configuration.** All workspaces run the same `.tf` files from that one directory. There's only one `main.tf`, and every workspace executes it.
+
+So if you edit `main.tf`, that change hits `dev`, `prod`, and every other workspace the next time you `apply` in each.
+
+**How you make the config behave differently per workspace**
+
+The config stays shared, but you branch inside it using the `terraform.workspace` value:
+
+```hcl
+locals {
+  vm_size = {
+    dev  = "Standard_B1s"
+    prod = "Standard_D4s_v5"
+  }
+
+  instance_count = {
+    dev  = 1
+    prod = 3
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "this" {
+  count = local.instance_count[terraform.workspace]
+  size  = local.vm_size[terraform.workspace]
+  name  = "vm-${terraform.workspace}-${count.index}"
+  # ...
+}
+```
+
+Or per-workspace tfvars:
+
+```bash
+terraform workspace select dev
+terraform apply -var-file="dev.tfvars"
+```
+
+**The catch (why this isn't true isolation)**
+
+- A syntax error or a bad resource change in `main.tf` breaks **all** workspaces at once.
+- You can't run a different provider version, different module version, or different backend per workspace.
+- It's easy to `apply` in the wrong workspace and hit prod by accident (the state is separate, but nothing stops the command).
+- Blast radius is shared — one repo, one set of files.
+
+**When to use which**
+
+| Need | Approach |
+|------|----------|
+| Same infra shape, small param differences (dev/test/stage of one system) | Workspaces + `terraform.workspace` maps |
+| Real environment isolation (prod vs non-prod), different configs, separate access control, separate backends | Separate root directories/modules — `environments/dev/`, `environments/prod/`, each with its own backend and its own `terraform.tfstate` |
+
+HashiCorp's own guidance: workspaces are convenient for lightweight variations, but strong environment separation should be separate root configurations, not workspaces.
+
 ### 4.5.4 Solution 3: Hybrid (Best for Teams)
 
 **Combine separate directories + workspaces**:
@@ -1264,6 +1320,23 @@ resource "aws_internet_gateway" "main" {
 ```
 
 **When to use `depends_on`**: Only when there's a non-obvious dependency that Terraform can't detect automatically (rare).
+
+### 7.1.1 Q&A: Are Blocks/Files Processed Alphabetically?
+
+**Question**: Terraform merges `variables.tf`, `main.tf`, `output.tf`, `versions.tf`, `backend.tf`, etc. into one logical config at parse time. Does it then process blocks alphabetically, or process files alphabetically?
+
+**Answer**: Neither. File name and file order are irrelevant to execution order.
+
+- Terraform parses **all** `.tf` files in a directory and merges them into a single logical configuration — as if they were one file. Splitting into `main.tf`/`variables.tf`/`output.tf`/etc. is a human convention for readability only.
+- Execution order is decided by the **dependency graph (DAG)**, built from:
+  - **Implicit dependencies** — one resource references another's attribute (Terraform infers an edge)
+  - **Explicit dependencies** — `depends_on`
+- Terraform performs a **topological sort** of that graph to decide create/update order. Nodes with no dependency relationship can run **concurrently** (subject to `-parallelism`), not alphabetically.
+- Argument order **within** a block doesn't matter either — same reasoning: dependencies come from references, not position.
+
+**The one real exception**: `override.tf` (and `*_override.tf`) files are special-cased — Terraform merges them **last**, after all other files, specifically so they can override previously-defined blocks. That's the only place filename affects merge order.
+
+**Where to practice**: reason about this using [05-Lab-RemoteState-backend/](05-Lab-RemoteState-backend/) or any lab with `main.tf` + `variables.tf` + `output.tf` split — note that resource creation order there follows references, not file order.
 
 ### 7.2 Lifecycle Rules (Control Resource Behavior)
 
