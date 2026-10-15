@@ -74,3 +74,6 @@ resource "azurerm_role_assignment" "vm_admin_login" {
 - **Review access regularly** with Entra access reviews.
 - **Secure remote state**, since it can contain sensitive values.
 
+1.  Adding a group
+2.  Assinging a group memebership
+3.  and providing access of that group to vm

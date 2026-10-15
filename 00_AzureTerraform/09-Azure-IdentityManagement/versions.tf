@@ -21,6 +21,9 @@ terraform {
 # Configure the Microsoft Azure Provider
 provider "azurerm" {
   features {
+    key_vault {
+      purge_soft_delete_on_destroy = true # with this enabled before it deletes the key it is going to perform the purge operation over the key
+    }
   }
   #   subscription_id = "355d1606-549b-4027-86d8-7036748a1e32" # use az account show to grab this, otherwise do it using env variable
 }
