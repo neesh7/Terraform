@@ -6,7 +6,7 @@ Special Entra ID Provider -> Azure Actionve Directory Provider (AAD)
 ---
 
 ## Microsoft Entra vs Azure
-
+- Azure and Entra ID are different platform but they are related as azure depends on entra ID for authentication standpoint. And to use EntraID we need a different Terraform Provider.
 - **Microsoft Entra ID** (formerly Azure Active Directory, renamed in 2023) is the identity service. It manages users, groups, apps, service principals, MFA, conditional access, and SSO.
 - **Azure** is the cloud platform. It runs resources such as VMs, VNets, storage, and Key Vault, and it is managed through Azure Resource Manager.
 - An Azure subscription trusts one Entra tenant. Azure logins and resource access are both backed by Entra identities.

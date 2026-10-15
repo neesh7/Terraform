@@ -9,8 +9,12 @@ terraform {
       version = "3.2.0"
     }
     random = {
-      source = "hashicorp/random"
+      source  = "hashicorp/random"
       version = "~>3.9.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~>4.4.0"
     }
   }
 }
@@ -18,6 +22,6 @@ terraform {
 provider "azurerm" {
   features {
   }
-#   subscription_id = "355d1606-549b-4027-86d8-7036748a1e32" # use az account show to grab this, otherwise do it using env variable
+  #   subscription_id = "355d1606-549b-4027-86d8-7036748a1e32" # use az account show to grab this, otherwise do it using env variable
 }
 # export ARM_SUBSCRIPTION_ID="355d1606-549b-4027-86d8-7036748a1e32" 

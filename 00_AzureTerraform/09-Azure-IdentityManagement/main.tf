@@ -1,6 +1,6 @@
 # Cerating resource group
 resource "azurerm_resource_group" "main" {
-  name = "rg-${var.application_name}-${var.environment_name}" # environment name will flow here from env/dev.tfvars or env/prod.tfvars
+  name     = "rg-${var.application_name}-${var.environment_name}" # environment name will flow here from env/dev.tfvars or env/prod.tfvars
   location = var.primary_location
 }
 
@@ -38,7 +38,7 @@ resource "azurerm_network_interface" "vm1" {
 # SSH Key - to login into the vm
 resource "tls_private_key" "vm1" {
   algorithm = "RSA"
-  rsa_bits = 4096
+  rsa_bits  = 4096
 }
 # tls_private_key.vm1
 # tls_private_key.vm1.public_key_openssh
@@ -54,14 +54,14 @@ resource "random_string" "keyvault_suffix" {
 }
 
 resource "azurerm_key_vault" "main" {
-  name                        = "kv-${var.application_name}-${var.environment_name}-${random_string.keyvault_suffix.result}"
-  location                    = azurerm_resource_group.main.location
-  resource_group_name         = azurerm_resource_group.main.name
-  rbac_authorization_enabled  = true
-  tenant_id                   = data.azurerm_client_config.current.tenant_id
-  soft_delete_retention_days  = 7
-  purge_protection_enabled    = false
-  sku_name                    = "standard"
+  name                       = "kv-${var.application_name}-${var.environment_name}-${random_string.keyvault_suffix.result}"
+  location                   = azurerm_resource_group.main.location
+  resource_group_name        = azurerm_resource_group.main.name
+  rbac_authorization_enabled = true
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  soft_delete_retention_days = 7
+  purge_protection_enabled   = false
+  sku_name                   = "standard"
 }
 
 # Grant the current caller permission to write/read secrets before we try to create any
@@ -133,10 +133,16 @@ resource "azurerm_virtual_machine_extension" "aad_ssh_login" {
 
 # Step 5b : RBAC - allow the Entra group/user to log in to the VM
 # "Virtual Machine User Login" = standard login, "Virtual Machine Administrator Login" = sudo/admin
+# resource "azurerm_role_assignment" "vm_login" {
+#   scope                = azurerm_linux_virtual_machine.vm1.id
+#   role_definition_name = "Virtual Machine User Login"
+#   principal_id         = data.azurerm_client_config.current.object_id
+# }
+# Step 5c: Instead of Individual user we are providing access to groups
 resource "azurerm_role_assignment" "vm_login" {
   scope                = azurerm_linux_virtual_machine.vm1.id
   role_definition_name = "Virtual Machine User Login"
-  principal_id         = var.azurerm_client_config.current.object_id
+  principal_id         = azuread_group.remote_access_users.object_id
 }
 # Step 6: Spinning up a Bastion Resource
 
