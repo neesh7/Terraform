@@ -139,6 +139,125 @@ terraform {
 4. **Document policy**: "All changes must go through Terraform; manual changes are forbidden"
 5. **Regular audits**: Check terraform plan output before any apply
 
+### 1.1.4 Resource Changes: In-Place Modification vs Destroy-and-Recreate
+
+When you modify a Terraform resource, **not all changes are treated equally**. Some changes update the resource in-place (no downtime), while others require destroying and recreating it (potential downtime/data loss).
+
+**How Terraform Handles Changes**:
+
+During `terraform plan` and `terraform apply`, Terraform compares your configuration with the current cloud state and determines:
+- **In-place modification (~)** — Change the resource property without destroying it
+- **Destroy and recreate (-/+)** — Destroy old resource and create a new one
+- **Create (+)** — Resource doesn't exist; create it
+- **Delete (-)** — Resource removed from config; destroy it
+
+**Azure Examples: What Causes In-Place Changes?**
+
+✅ **In-place modifications** (safe, no downtime):
+```hcl
+resource "azurerm_linux_virtual_machine" "app" {
+  # These changes = in-place (~)
+  tags = {
+    Environment = "prod"  # Changing tags
+    Owner       = "team"
+  }
+}
+```
+
+```hcl
+resource "azurerm_storage_account" "data" {
+  name = "mystorageacct"
+  
+  # These changes = in-place (~)
+  access_tier = "Hot"              # Change tier
+  https_traffic_only_enabled = true # Enable HTTPS
+  identity {
+    type = "SystemAssigned"        # Add identity
+  }
+}
+```
+
+❌ **Destroy-and-recreate changes** (downtime/data loss risk):
+```hcl
+resource "azurerm_linux_virtual_machine" "app" {
+  # These changes = destroy-and-recreate (-/+)
+  vm_size = "Standard_D2s_v3"  # Changing VM size
+  os_disk {
+    disk_size_gb = 128         # Changing OS disk size
+  }
+}
+```
+
+```hcl
+resource "azurerm_storage_account" "data" {
+  name = "mystorageacct"  # Changing name forces recreate
+  
+  account_tier = "Premium"  # Some tier changes force recreate
+}
+```
+
+**Common Azure Resources: In-Place vs Recreate**
+
+| Resource | In-Place Changes | Recreate Changes |
+|----------|---|---|
+| `azurerm_resource_group` | tags, add new properties | name, location |
+| `azurerm_storage_account` | tags, access_tier, identity | name, account_tier (sometimes) |
+| `azurerm_linux_virtual_machine` | tags, identity | vm_size, os_disk.disk_size_gb, source_image_reference |
+| `azurerm_virtual_network` | tags, dns_servers | name, address_space, location |
+| `azurerm_subnet` | address_prefix (sometimes) | name, vnet_name |
+| `azurerm_app_service` | tags, identity, app_settings | name, app_service_plan_id |
+| `azurerm_network_security_group` | tags, security_rules | name, location |
+| `azurerm_public_ip` | tags, idle_timeout_in_minutes | name, allocation_method, location |
+
+**Key Insight: Terraform Plan Shows the Difference**
+
+Always run `terraform plan` BEFORE `apply` to see exactly what will happen:
+
+```bash
+terraform plan
+
+# Output example:
+# ~ azurerm_linux_virtual_machine.app will be updated in-place
+#   ~ tags["Environment"] = "dev" -> "prod"  # In-place (~)
+
+# But:
+# -/+ azurerm_linux_virtual_machine.app will be destroyed and recreated
+#   ~ vm_size = "Standard_B1s" -> "Standard_D2s_v3"  # Recreate (-/+)
+```
+
+**Symbols in terraform plan**:
+- `~` = In-place modification (safe)
+- `-/+` or `+/-` = Destroy and recreate (risky)
+- `+` = Create new resource
+- `-` = Delete resource
+
+**Best Practices for Avoiding Downtime**:
+
+1. **Always review `terraform plan` output** — Check for `-/+` symbols
+2. **Use `lifecycle` block for critical resources**:
+   ```hcl
+   resource "azurerm_linux_virtual_machine" "app" {
+     vm_size = "Standard_D2s_v3"
+     
+     lifecycle {
+       create_before_destroy = true  # Create new before destroying old
+     }
+   }
+   ```
+
+3. **Separate data from compute** — Don't recreate resources with data attached
+4. **Plan and review before applying to production** — Catch surprises early
+
+**Why In-Place vs Recreate?**
+
+Azure (and most cloud providers) have two update mechanisms:
+- **Fast API calls** (in-place) — Tags, settings, metadata can update instantly
+- **Full replacement required** (recreate) — Compute size, storage tier, and core properties often need new resources
+
+Terraform respects these provider constraints and decides based on Azure's documented behavior.
+
+---
+
 ### 1.2 HCL Syntax Basics
 
 ```hcl
@@ -2197,6 +2316,163 @@ Before deploying to production, ensure:
 
 ---
 
+## 🧩 Level 10: Gap-Fill (topics from the course chapter list not covered above)
+
+> Added 2026-10-05 after checking this guide against the course chapter list.
+> Provisioners and taint/import/debugging have full notes in
+> [09_Terraform-Provisioners](../09_Terraform-Provisioners/Terraform-Provisioners.md) and
+> [10_Terraform-Import-Tainting-and-Debugging](../10_Terraform-Import-Tainting-and-Debugging/Terraform-Import-Tainting-and-Debugging.md);
+> this section is the short version.
+
+### 10.1 History & Current Trends
+
+| When | What happened |
+|------|---------------|
+| 2014 | HashiCorp (Mitchell Hashimoto, Armon Dadgar) releases Terraform 0.1 |
+| 2021 | Terraform **1.0** GA, with a backward-compatibility promise for 1.x |
+| Aug 2023 | License changes from **MPL 2.0 → BSL 1.1** (source-available, no longer open source) |
+| Jan 2024 | **OpenTofu** (Linux Foundation fork of the last MPL version) reaches GA |
+| 2024 | Terraform Cloud renamed **HCP Terraform**; azurerm provider **4.x** released (`subscription_id` now required) |
+| Feb 2025 | **IBM** completes acquisition of HashiCorp |
+
+**Language features worth naming in an interview:**
+- **1.5**: `import` blocks (+ `-generate-config-out`), `check` blocks
+- **1.6**: `terraform test` (native testing framework)
+- **1.7**: `removed` block, mocking in tests
+- **1.10 / 1.11**: ephemeral resources and write-only arguments (secrets that never reach state), S3 backend native locking (`use_lockfile`)
+- **Trend**: Terraform Stacks (HCP), policy-as-code, AI-assisted IaC generation, Azure Verified Modules (AVM)
+
+### 10.2 Terraform vs Other Tools
+
+| | Terraform | Ansible | CloudFormation | ARM / Bicep |
+|---|---|---|---|---|
+| Primary job | Provisioning infra | Configuring servers/apps | Provisioning (AWS) | Provisioning (Azure) |
+| Style | Declarative | Procedural-ish (ordered tasks), declarative modules | Declarative | Declarative |
+| Cloud scope | Multi-cloud + SaaS (thousands of providers) | Multi | AWS only | Azure only |
+| State | Own state file (local/remote) | Stateless | Managed by AWS (stack) | No state file; Azure is the source of truth |
+| Preview | `plan` | `--check` mode | Change sets | `what-if` |
+| Rollback on failure | No automatic rollback | No | Automatic stack rollback | No (incremental mode) |
+| Day-0 support for new services | Lags slightly (provider release) | Varies | Usually fast | Immediate |
+
+**One-liner:** *Terraform builds the house, Ansible furnishes it.* They are commonly used together: Terraform creates VMs, then Ansible configures them.
+
+### 10.3 Setup (Local & VM)
+
+```bash
+# Windows
+winget install Hashicorp.Terraform        # or: choco install terraform
+# Linux (VM / pipeline agent)
+wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+unzip terraform_*.zip && sudo mv terraform /usr/local/bin/
+terraform -version
+terraform -install-autocomplete
+```
+- Use **tfenv** (Linux/macOS) to switch versions per project; pin `required_version` in code.
+- Authenticate to Azure: `az login` locally; service principal / managed identity / **OIDC** in pipelines.
+- VS Code: HashiCorp Terraform extension (syntax, `fmt` on save, validation).
+
+### 10.4 Types of Blocks (full list)
+
+| Block | Purpose |
+|-------|---------|
+| `terraform` | Settings: `required_version`, `required_providers`, `backend`, `cloud` |
+| `provider` | Configure a provider (auth, region, `alias`) |
+| `resource` | Create/manage an infrastructure object |
+| `data` | Read an existing object (read-only) |
+| `variable` | Input |
+| `output` | Expose a value |
+| `locals` | Named intermediate expressions |
+| `module` | Call a child module |
+| `moved` | Rename/refactor a resource address without destroy (1.1+) |
+| `import` | Bring an existing resource into state declaratively (1.5+) |
+| `removed` | Remove from state without destroying (1.7+) |
+| `check` | Post-apply assertions/health checks (1.5+) |
+
+**Nested blocks:** `lifecycle`, `provisioner`, `connection`, `dynamic`, `backend`, `required_providers`, `validation`, `precondition`/`postcondition`.
+
+**Terminology:** a *block* has a type and labels; *arguments* are what you set (`name = "x"`); *attributes* are what you read back (`azurerm_resource_group.main.id`).
+
+### 10.5 Provisioners & User Data (custom_data)
+
+```hcl
+resource "azurerm_linux_virtual_machine" "web" {
+  # ...
+  custom_data = base64encode(file("${path.module}/cloud-init.yaml"))   # Azure = custom_data, AWS = user_data
+
+  provisioner "local-exec" {
+    command = "echo ${self.private_ip_address} >> inventory.txt"
+  }
+}
+```
+- **Types:** `local-exec` (runs on the Terraform machine), `remote-exec` (SSH/WinRM to the VM, needs a `connection` block), `file` (copies files).
+- **`when = destroy`** runs at destroy time; **`on_failure = continue | fail`** controls failure handling.
+- **Why last resort:** not tracked in state, not shown in `plan`, not idempotent, and a failure taints the resource.
+- **Prefer instead:** `custom_data`/cloud-init, VM extensions (`azurerm_virtual_machine_extension`), pre-baked images (Packer), or Ansible after provisioning.
+- **Gotcha:** changing `custom_data` **forces VM replacement**.
+- `null_resource` → replaced by built-in **`terraform_data`** (1.4+) for "run something when X changes" (`triggers_replace`).
+
+### 10.6 Advanced CLI: taint, graph, refresh, state
+
+```bash
+terraform taint azurerm_linux_virtual_machine.web       # deprecated (0.15.2+)
+terraform apply -replace="azurerm_linux_virtual_machine.web"   # ✅ modern way: shown in plan first
+terraform untaint <addr>
+
+terraform graph | dot -Tsvg > graph.svg                 # visualize the dependency DAG (Graphviz)
+
+terraform refresh                                       # deprecated: silently overwrites state
+terraform plan  -refresh-only                           # ✅ shows drift first
+terraform apply -refresh-only                           # ✅ accept drift into state
+
+terraform state list | show | mv | rm | pull | push
+terraform force-unlock <LOCK_ID>                        # only when sure no run is active
+```
+
+### 10.7 State Locking on AWS (DynamoDB) vs Azure
+
+```hcl
+# AWS (classic): S3 for state + DynamoDB table (partition key "LockID") for locking
+terraform {
+  backend "s3" {
+    bucket         = "my-tf-state"
+    key            = "prod/terraform.tfstate"
+    region         = "ap-south-1"
+    encrypt        = true
+    dynamodb_table = "tf-locks"   # deprecated in newer versions...
+    # use_lockfile = true          # ...in favour of S3-native locking (1.10+)
+  }
+}
+```
+| | AWS | Azure |
+|---|---|---|
+| State storage | S3 bucket (versioning + encryption on) | Storage Account blob container (versioning + soft delete) |
+| Locking | DynamoDB table → S3 native lockfile (1.10+) | **Blob lease**: built in, nothing extra to create |
+
+### 10.8 Using Prebuilt Registry Modules
+
+```hcl
+module "vnet" {
+  source  = "Azure/avm-res-network-virtualnetwork/azurerm"   # Azure Verified Module
+  version = "~> 0.4"                                          # always pin registry modules
+  # inputs...
+}
+```
+- Source formats: registry (`namespace/name/provider`), Git (`git::https://...?ref=v1.2.0`), local path (`./modules/x`).
+- Before using a public module: check the publisher (verified/partner badge), version history, open issues, and **read what it creates**.
+- `terraform init -upgrade` to pull newer allowed versions.
+
+### Level 10 Checklist
+- [ ] Explain the BSL license change, OpenTofu, IBM acquisition, HCP Terraform
+- [ ] Compare Terraform with Ansible, CloudFormation, and Bicep
+- [ ] Install Terraform locally and on a Linux VM/agent; manage versions
+- [ ] Name all top-level block types, including `moved` / `import` / `removed` / `check`
+- [ ] Provisioner types, why they are a last resort, `custom_data` / cloud-init
+- [ ] `taint` vs `-replace`, `graph`, `refresh` vs `-refresh-only`
+- [ ] S3 + DynamoDB locking vs Azure blob lease
+- [ ] Use and pin a Terraform Registry module
+
+---
+
 ## 📖 Additional Resources
 
 - **Official Terraform Docs**: https://www.terraform.io/docs
@@ -2207,7 +2483,7 @@ Before deploying to production, ensure:
 
 ---
 
-**Last Updated**: 2026-09-06  
+**Last Updated**: 2026-10-05  
 **Repository**: d:\Codes\Terraform\00_AzureTerraform
 
 ---
@@ -2223,4 +2499,5 @@ Before deploying to production, ensure:
 ✅ **Advanced**: Data sources, dependencies, lifecycle, dynamic blocks  
 ✅ **Practical Examples**: Multi-env deployment, drift detection CI/CD  
 ✅ **Production Ready**: Security, testing, troubleshooting  
+✅ **Gap-Fill (Level 10)**: History & trends, tool comparisons, setup, block types, provisioners & custom_data, taint/graph/refresh, DynamoDB locking, registry modules  
 ✅ **Complete Checklist**: 50+ concepts organized by level

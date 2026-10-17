@@ -9,7 +9,7 @@ export TF_VAR_environment_name="dev"
 
 # set the backend
 export BACKEND_RESOURCE_GROUP="rg-tfstate-dev"
-export BACKEND_STORAGE_ACCOUNT="stfxnuyvwhjs"
+export BACKEND_STORAGE_ACCOUNT="stjq47ue88ju"
 export BACKEND_STORAGE_CONTAINER="tfstate"
 export BACKEND_KEY=$TF_VAR_application_name-$TF_VAR_environment_name
 

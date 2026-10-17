@@ -2,16 +2,16 @@
 resource "azurerm_resource_group" "main" {
   # following a proper naming convention
   # name = "rg-foobar"
-  name = "rg-${var.application_name}-${var.environment_name}" # environment name will flow here from env/dev.tfvars or env/prod.tfvars
+  name     = "rg-${var.application_name}-${var.environment_name}" # environment name will flow here from env/dev.tfvars or env/prod.tfvars
   location = var.primary_location
 }
 # terraform apply -var-file ./env/dev.tfvars
 
 # Stept 2.1: Generating random string to use in naming of resources
 resource "random_string" "random_string_suffix" {
-    length = 10
-    upper = false
-    special = false
+  length  = 10
+  upper   = false
+  special = false
 }
 
 # Step 2: Setting up storage account

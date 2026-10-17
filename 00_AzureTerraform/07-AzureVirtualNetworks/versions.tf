@@ -8,6 +8,10 @@ terraform {
       source = "hashicorp/random"
       version = "~>3.9.0"
     }
+    http = {
+      source  = "hashicorp/http"
+      version = "~>3.6.0"
+    }
   }
 }
 # Configure the Microsoft Azure Provider

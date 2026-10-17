@@ -15,7 +15,7 @@ resource "azurerm_virtual_network" "main" {
 
 # CIDR: 10.39.0.0/22 -> we are using ipv4 means it have 4 octates with 32 bit
 # to calculate the actual range is 32-n and 'n' comes after '/' which is 22 here
-# range = 32-22=10 means 2^10=1024 means the effective range of vnet is 10.39.0.0 to 10.0.0.1023
+# range = 32-22=10 means 2^10=1024 means the effective range of vnet is 10.39.0.0 to 10.39.3.255
 # we want to make 4 slices in this vnet means 4 subnet 
 
 # My 4 subnet address range
@@ -100,7 +100,7 @@ resource "azurerm_network_security_group" "Remote_access" {
     destination_port_range     = "22" # This is to open ssh port
     # source_address_prefix      = "*" # This is not a ideal setup as anyone over internet can access our vm conncected with this nsg
      # By locking down source ip address we are allowing the individual with this ip only to access the nsg or vm
-    source_address_prefix = chomp(data.http.myip.body)
+    source_address_prefix = chomp(data.http.myip.response_body)
     destination_address_prefix = "*"
   }
 

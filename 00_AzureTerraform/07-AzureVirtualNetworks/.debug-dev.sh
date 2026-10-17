@@ -10,7 +10,7 @@ export TF_VAR_base_address_space="10.39.0.0/22"
 
 # set the backend
 export BACKEND_RESOURCE_GROUP="rg-tfstate-dev"
-export BACKEND_STORAGE_ACCOUNT="stfxnuyvwhjs"
+export BACKEND_STORAGE_ACCOUNT="steh52icsuob"
 export BACKEND_STORAGE_CONTAINER="tfstate"
 export BACKEND_KEY=$TF_VAR_application_name-$TF_VAR_environment_name
 
