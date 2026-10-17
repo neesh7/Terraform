@@ -18,6 +18,6 @@ terraform {
 provider "azurerm" {
   features {
   }
-#   subscription_id = "355d1606-549b-4027-86d8-7036748a1e32" # use az account show to grab this, otherwise do it using env variable
+#   subscription_id = "00000000-0000-0000-0000-000000000000" # use az account show to grab this, otherwise do it using env variable
 }
-# export ARM_SUBSCRIPTION_ID="355d1606-549b-4027-86d8-7036748a1e32" 
+# export ARM_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000" 

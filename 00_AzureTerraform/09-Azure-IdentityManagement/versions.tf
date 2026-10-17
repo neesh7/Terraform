@@ -25,6 +25,6 @@ provider "azurerm" {
       purge_soft_delete_on_destroy = true # with this enabled before it deletes the key it is going to perform the purge operation over the key
     }
   }
-  #   subscription_id = "355d1606-549b-4027-86d8-7036748a1e32" # use az account show to grab this, otherwise do it using env variable
+  #   subscription_id = "00000000-0000-0000-0000-000000000000" # use az account show to grab this, otherwise do it using env variable
 }
-# export ARM_SUBSCRIPTION_ID="355d1606-549b-4027-86d8-7036748a1e32" 
+# export ARM_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000" 

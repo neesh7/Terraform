@@ -1,5 +1,5 @@
 # set the subscription
-export ARM_SUBSCRIPTION_ID="355d1606-549b-4027-86d8-7036748a1e32"
+export ARM_SUBSCRIPTION_ID="${ARM_SUBSCRIPTION_ID:-00000000-0000-0000-0000-000000000000}"
 
 
 # set the application / environment
