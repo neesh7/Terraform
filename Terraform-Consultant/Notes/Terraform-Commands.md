@@ -1,14 +1,18 @@
 # Terraform Commands
 
-## Format & Validate
+## Format
 ```bash
 terraform fmt         # Format config files to the canonical style
-terraform validate    # Check config for syntax and internal consistency
 ```
 
 ## Init
 ```bash
 terraform init        # Download providers & modules, configure backend, create/update .terraform.lock.hcl
+```
+
+## Validate
+```bash
+terraform validate    # Check config for syntax and internal consistency (needs init first)
 ```
 
 ## Plan

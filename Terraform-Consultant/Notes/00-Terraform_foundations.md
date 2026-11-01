@@ -70,7 +70,7 @@ Basically focuses on defining what you want the outcome to be, not how to achiev
 4. Apply (actually provision the infra)
 
 **My custom workflow:**
-Write Config Files -> Init -> Validate -> FMT -> Plan -> Apply/Destroy
+Write Config Files -> FMT -> Init -> Validate -> Plan -> Apply/Destroy
 
 ## Init Stage
 - Downloads providers & modules, handles backend management, creates/updates the lock file `.terraform.lock.hcl`
@@ -82,6 +82,18 @@ Write Config Files -> Init -> Validate -> FMT -> Plan -> Apply/Destroy
   └── modules/
   ```
 - Do not check in the `.terraform` directory to version control. It can be safely deleted to keep the project lightweight (`terraform init` recreates it)
+
+## Validate (`terraform validate`)
+- Checks whether the configuration is syntactically valid and internally consistent (correct argument names/types, valid references, required arguments present)
+- Runs **locally** - does not call provider APIs or check remote state, so it won't catch things like an invalid VM size or a name that's already taken
+- Requires `terraform init` first (it needs the provider schemas)
+- Great as an early, fast check in CI/CD before `plan`; use `-json` for machine-readable output
+```bash
+terraform validate
+# Success! The configuration is valid.
+```
+
+> 📝 **Note:** `validate` does not communicate with providers (no API calls), so it is not going to catch all errors. A config can pass `validate` and still fail at `plan`/`apply` — e.g. invalid SKU/region, name already taken, missing permissions, or quota limits.
 
 ## Plan Stage
 - `terraform plan` generates an execution plan showing the changes Terraform will make to real-world resources in order to match the desired state configuration
