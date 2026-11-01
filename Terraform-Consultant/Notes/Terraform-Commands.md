@@ -28,5 +28,6 @@ terraform apply -parallelism=5        # Change the number of parallel operations
 
 ## Destroy
 ```bash
-terraform destroy     # Destroy all resources managed by this configuration
+terraform destroy                                   # Destroy all resources managed by this configuration
+terraform destroy -target=<resource_type>.<name>    # Destroy a single specific resource
 ```

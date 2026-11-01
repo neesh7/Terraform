@@ -164,3 +164,18 @@ What happens behind the scenes when Terraform modifies your infrastructure:
 3. **Avoid `-auto-approve` outside of pipelines** - only use it in CI/CD where a reviewed saved plan or an approval gate already exists; never casually on production
 4. **Apply through CI/CD, not from laptops** - run `fmt`, `validate`, and `plan` in the pipeline with consistent credentials, provider versions (`.terraform.lock.hcl`), and an audit trail
 5. **Keep changes small and target the right environment** - smaller applies reduce blast radius (remember: no automatic rollback); double-check the workspace/backend/var-file before applying, and use `-target` only for exceptional fixes
+
+## Destroy Stage (`terraform destroy`)
+`terraform destroy` terminates resources managed by Terraform in the current workspace or working directory.
+- **Using the Destroy Command** - explicitly destroys all infrastructure being managed by Terraform. This operation does prompt for confirmation before proceeding, and shows the destruction plan first
+- **Removing Individual Resources from your Configuration** - delete resource blocks from your `.tf` files and then run `terraform apply`. Terraform detects the removed resources and destroys the real-world resources
+- **State File Updates** - once a resource is destroyed, Terraform removes it from the state file as well, since it is no longer being managed
+
+### Destroying a Single Resource
+You can target specific resources, if needed, using the destroy command:
+```bash
+terraform destroy -target=<resource_type>.<resource_name>
+# e.g. terraform destroy -target=azurerm_virtual_machine.web
+```
+
+> ⚠️ **WARNING:** Destroy operations are irreversible. Always review the plan carefully.
