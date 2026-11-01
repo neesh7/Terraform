@@ -1,0 +1,9 @@
+# Personal study plan
+Plan.md
+
+# Local .terraform directories
+**/.terraform/*
+
+# State files
+*.tfstate
+*.tfstate.*
