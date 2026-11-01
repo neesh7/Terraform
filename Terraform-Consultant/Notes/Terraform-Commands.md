@@ -7,9 +7,12 @@ terraform <subcommand> [options or flags]
 ## Help & Global Options
 ```bash
 terraform -help                               # List all commands
+terraform --help                              # Same as -help (also -h)
 terraform <subcommand> -help                  # Help for a specific command
 terraform -chdir=envs/dev plan                # Run a command against another directory
 terraform version                             # Show CLI version and provider versions in use
+terraform -install-autocomplete               # Enable tab-completion for commands (bash/zsh, restart shell after)
+terraform -uninstall-autocomplete             # Remove tab-completion
 ```
 
 ## Format
@@ -127,6 +130,66 @@ terraform logout                              # Remove saved credentials
 terraform test                                # Run *.tftest.hcl test files (v1.6+)
 ```
 
+## Few Advanced Commands
+```bash
+# Deprecated commands (know what replaces them)
+terraform taint <addr>                        # DEPRECATED - mark resource for recreation → use: terraform apply -replace=<addr>
+terraform untaint <addr>                      # DEPRECATED - remove taint mark
+terraform refresh                             # DEPRECATED - update state from real infra → use: terraform apply -refresh-only
+
+# State locking
+terraform plan -lock=false                    # Don't acquire a state lock (dangerous with shared state)
+terraform apply -lock-timeout=60s             # Wait up to 60s for the lock instead of failing immediately
+
+# Refresh behavior
+terraform plan -refresh=false                 # Skip checking real infra (faster, but may use stale state)
+
+# Targeting & variables on apply/destroy
+terraform apply -target=<addr>                # Apply only a specific resource (exceptional fixes only)
+terraform apply -var="location=eastus"        # -var / -var-file also work on apply and destroy
+terraform destroy -var-file=dev.tfvars
+
+# Providers & HCP Terraform
+terraform providers lock -platform=linux_amd64 -platform=windows_amd64   # Record provider hashes for multiple OSes
+terraform init                                # With a `cloud {}` block: connects to HCP Terraform workspaces
+
+# Metadata
+terraform metadata functions -json            # List all available built-in functions (JSON)
+```
+
+**Config blocks instead of state commands** (declarative, show up in the plan for review):
+```hcl
+# Import existing resource (v1.5+) - instead of `terraform import`
+import {
+  to = azurerm_resource_group.main
+  id = "/subscriptions/<sub-id>/resourceGroups/rg-demo"
+}
+
+# Rename/move resource (v1.1+) - instead of `terraform state mv`
+moved {
+  from = azurerm_virtual_network.old
+  to   = azurerm_virtual_network.main
+}
+
+# Stop managing without destroying (v1.7+) - instead of `terraform state rm`
+removed {
+  from = azurerm_storage_account.legacy
+  lifecycle {
+    destroy = false
+  }
+}
+
+# Connect to HCP Terraform
+terraform {
+  cloud {
+    organization = "my-org"
+    workspaces {
+      name = "dev"
+    }
+  }
+}
+```
+
 ## Environment Variables
 ```bash
 # Bash
@@ -138,10 +201,12 @@ export TF_CLI_ARGS_plan="-parallelism=5"      # Extra flags for a specific comma
 export TF_WORKSPACE=dev                       # Select workspace
 TF_LOG=DEBUG terraform plan                   # Set only for a single command
 unset TF_LOG                                  # Turn logging off
+alias tf=terraform                            # Shortcut: `tf init` instead of `terraform init` (add to ~/.bashrc to persist)
 ```
 ```powershell
 # PowerShell
-$env:TF_VAR_location = "eastus"
-$env:TF_LOG = "DEBUG"
-Remove-Item Env:TF_LOG
+$env:TF_VAR_location = "eastus"               # Set input variable `location`
+$env:TF_LOG = "DEBUG"                         # Enable logging
+Remove-Item Env:TF_LOG                        # Turn logging off
+Set-Alias tf terraform                        # Shortcut: `tf init` instead of `terraform init` (add to $PROFILE to persist)
 ```
