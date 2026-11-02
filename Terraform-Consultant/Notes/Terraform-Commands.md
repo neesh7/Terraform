@@ -79,6 +79,8 @@ terraform output                              # Show all outputs
 terraform output <name>                       # Show a single output (reveals sensitive values)
 terraform output -raw <name>                  # Plain string, no quotes (scripts)
 terraform output -json                        # All outputs as JSON
+terraform output -json <name>                 # Single output as JSON (lists/maps/objects)
+terraform output -no-color                    # Outputs without color codes (logs/pipelines)
 terraform console                             # Interactive shell to test expressions/functions
 terraform graph | dot -Tsvg > graph.svg       # Export dependency graph (DOT) and render with Graphviz
 ```
