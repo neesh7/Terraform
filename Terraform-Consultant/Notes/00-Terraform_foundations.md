@@ -318,3 +318,76 @@ export AWS_ACCESS_KEY_ID="..."  AWS_SECRET_ACCESS_KEY="..."  AWS_REGION="us-east
 
 ### Testing
 - **`test`** - runs `*.tftest.hcl` test files (v1.6+). Tests use `run` blocks with `command = plan` or `command = apply` and `assert` conditions. Resources created in tests are destroyed automatically afterwards
+
+## Terraform File Structure
+Terraform loads **all `.tf` files in a directory** together and treats them as one configuration. File names don't matter to Terraform, but splitting them by purpose is the standard convention for readability.
+
+### Files You Write
+- **`main.tf`** - the core resources (and module calls)
+- **`variables.tf`** - `variable` blocks: input names, types, descriptions, defaults, validation
+- **`outputs.tf`** - `output` blocks: values to show after apply or pass to other configs
+- **`providers.tf`** - `provider` blocks (region, features, aliases)
+- **`versions.tf`** / **`terraform.tf`** - `terraform {}` block: `required_version`, `required_providers`, `backend`
+- **`locals.tf`** - `locals` block for computed/reused values (optional)
+- **`data.tf`** - `data` sources (optional)
+- **`terraform.tfvars`** - actual values for variables. Loaded automatically, along with `*.auto.tfvars`. Others are passed with `-var-file=prod.tfvars`
+
+### Files Terraform Generates
+- **`.terraform/`** - downloaded providers and modules (created by `init`). Never commit
+- **`.terraform.lock.hcl`** - locks exact provider versions + checksums so everyone uses the same versions. **Commit it**
+- **`terraform.tfstate`** - the state file: maps config to real resources. May contain secrets, so keep it in a remote backend, not in git
+- **`terraform.tfstate.backup`** - the previous state, written before each change. Never commit
+- **`*.tfplan`** - saved plan files (`plan -out`). Never commit
+
+### `.gitignore`
+```gitignore
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# ignore *.tfvars only if they hold secrets
+*.tfvars
+override.tf
+override.tf.json
+*_override.tf
+```
+
+### Managing Multiple Environments in Organizations
+Organizations run the same infrastructure in several environments (dev, test, staging, prod) and often across several projects/teams. Common approaches:
+
+**1. Directory per environment (most common)** - reusable code lives in `modules/`, and each environment is a small root module that calls those modules with its own values, backend and state.
+```text
+terraform/
+├── modules/              # reusable building blocks
+│   ├── network/
+│   ├── compute/
+│   └── database/
+├── projectx/
+│   ├── dev/
+│   │   ├── main.tf       # calls ../../modules/*
+│   │   ├── backend.tf    # separate state per env
+│   │   └── terraform.tfvars
+│   ├── test/
+│   └── prod/
+└── projecty/
+    ├── dev/
+    └── prod/
+```
+
+**2. Workspaces** - same code, one state file per workspace (`terraform workspace new dev`). Simple, but all envs share the same code and backend config, and it's easy to apply to the wrong one. Fine for short-lived or near-identical envs, not ideal for strict prod isolation.
+
+**3. Same code + per-env tfvars** - `terraform apply -var-file=dev.tfvars`, with a separate backend for each env (`init -backend-config=dev.backend.hcl`).
+
+**4. Tooling / platforms** - Terragrunt (keeps env configs DRY) or HCP Terraform workspaces linked to VCS branches/directories.
+
+Large orgs also split state by **layer** (network → shared services → apps), so a change to an app never touches the network's state.
+
+### Advantages
+- **Smaller blast radius** - each env/project has its own state, so a bad change or broken state in dev can't affect prod
+- **Isolation & access control** - different backends, credentials and permissions per env (e.g. only CI/CD can apply prod)
+- **Reusability (DRY)** - modules are written once and reused, so envs differ only in their input values
+- **Consistency** - dev, test and prod are built from the same modules, so "works in dev" usually means works in prod
+- **Safe promotion** - test a change in dev → test → prod. Modules can be version-pinned per env
+- **Faster plans & fewer lock conflicts** - smaller states mean quicker `plan`/`apply`, and teams don't block each other
+- **Clear ownership** - each team owns its directory/state, which makes reviews and audits easier
