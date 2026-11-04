@@ -23,9 +23,6 @@ override.tf.json
 .terraformrc
 terraform.rc
 
-# Lock file
-.terraform.lock.hcl
-
 # Plan output files
 *.tfplan
 
