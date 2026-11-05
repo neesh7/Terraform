@@ -332,10 +332,287 @@ resource "azurerm_storage_account" "st" {
 
 > **Tip:** Don't overuse locals. Wrapping every single value in a local hides where it comes from. Use them for values that are **repeated** or **calculated**.
 
+---
+
+## 4. Meta-Arguments: `count` and `for_each`
+**Meta-arguments** are special arguments built into Terraform. They work on **any resource** (and on modules) and change how Terraform handles that block, not how the provider configures the resource.
+
+| Meta-argument | Purpose |
+|---|---|
+| `count` | Create **N copies** of a resource |
+| `for_each` | Create **one copy per item** in a map or set |
+| `depends_on` | Add a dependency Terraform can't work out by itself |
+| `provider` | Pick a non-default (aliased) provider configuration |
+| `lifecycle` | Change create/destroy behaviour (`create_before_destroy`, `prevent_destroy`, `ignore_changes`) |
+
+### `count`
+```hcl
+variable "rg_names" { default = ["rg-web", "rg-app", "rg-db"] }
+
+resource "azurerm_resource_group" "rg" {
+  count    = length(var.rg_names)
+  name     = var.rg_names[count.index]     # count.index = 0, 1, 2
+  location = "eastus"
+}
+```
+- Instances are addressed by **number**: `azurerm_resource_group.rg[0]`, `rg[1]` ...
+- Get all of them with a **splat**: `azurerm_resource_group.rg[*].name`
+- **Conditional resource:** `count = var.create_rg ? 1 : 0`
+
+> **The `count` index problem:** if you remove `"rg-web"` (index 0) from the list, every item shifts down by one. Terraform then sees `rg[0]` change from rg-web to rg-app and `rg[1]` from rg-app to rg-db, so it **destroys and recreates** resources you never touched. Use `count` only for **identical** copies or on/off toggles.
+
+### `for_each`
+```hcl
+# With a set of strings
+resource "azurerm_resource_group" "rg" {
+  for_each = toset(["rg-web", "rg-app", "rg-db"])
+  name     = each.value                 # with a set, each.key == each.value
+  location = "eastus"
+}
+
+# With a map (when each instance needs different settings)
+variable "subnets" {
+  default = {
+    web = "10.0.1.0/24"
+    db  = "10.0.2.0/24"
+  }
+}
+
+resource "azurerm_subnet" "snet" {
+  for_each             = var.subnets
+  name                 = "snet-${each.key}"          # web, db
+  address_prefixes     = [each.value]                 # 10.0.1.0/24, 10.0.2.0/24
+  resource_group_name  = azurerm_resource_group.rg["rg-app"].name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+}
+```
+- Instances are addressed by **key**: `azurerm_subnet.snet["web"]`
+- Removing one key removes **only that instance**. The others stay as they are
+- Get all of them with a **`for` expression** (splat doesn't work on maps): `[for s in azurerm_subnet.snet : s.id]` or `values(azurerm_subnet.snet)[*].id`
+
+### `count` vs `for_each`
+| | `count` | `for_each` |
+|---|---|---|
+| Input | A whole number | A **map** or a **set of strings** (not a list) |
+| Iterator | `count.index` | `each.key`, `each.value` |
+| Address | `res.name[0]` | `res.name["key"]` |
+| Remove a middle item | Items after it shift → **recreated** | Only that item is destroyed |
+| Best for | Identical copies, on/off toggle | Distinct items with their own settings |
+
+### Important Points (Exam)
+1. You **can't use `count` and `for_each` in the same block**
+2. The value must be **known at plan time**. You can't base it on an attribute that only exists after apply (e.g. a generated resource ID)
+3. `for_each` takes **only a map or a set of strings**, so wrap lists with `toset()`. With a set, `each.key` and `each.value` are the same
+4. Both work on **modules** too (since TF 0.13): `module "vnet" { for_each = var.envs ... }`
+5. Moving from `count` to `for_each` changes resource addresses. Use a **`moved` block** or `terraform state mv` so Terraform doesn't destroy and recreate them
+6. Sensitive values can't be used as `for_each` keys
+
+---
+
+## 5. Refactoring Without Recreating (State Refactoring)
+Making code reusable usually means **renaming resources, switching `count` → `for_each`, or moving code into modules**. Each of these **changes the resource address**. Terraform then sees the old address as gone and the new one as new, so it plans **destroy + create**, even though the real resource hasn't changed.
+
+**The fix:** tell Terraform that the old address is now the new address, so it **updates state only** and changes no real infrastructure.
+- **`moved` block** (TF 1.1+, preferred): declarative, shown in `plan`, reviewed in PRs, and works for every workspace/env
+- **`terraform state mv`** (CLI): a one-off command, not reviewed, and you have to run it separately for each state
+
+> Block details are in **section 6** below. This section covers the common **refactoring scenarios**.
+
+### Common Scenarios
+```hcl
+# 1. Rename a resource
+moved {
+  from = azurerm_resource_group.rg
+  to   = azurerm_resource_group.main
+}
+
+# 2. count → for_each (one moved block per instance)
+moved {
+  from = azurerm_subnet.snet[0]
+  to   = azurerm_subnet.snet["web"]
+}
+moved {
+  from = azurerm_subnet.snet[1]
+  to   = azurerm_subnet.snet["db"]
+}
+
+# 3. Move a resource into a module
+moved {
+  from = azurerm_virtual_network.vnet
+  to   = module.network.azurerm_virtual_network.vnet
+}
+
+# 4. Rename a module (moves everything inside it)
+moved {
+  from = module.net
+  to   = module.network
+}
+
+# 5. Add for_each to an existing single resource/module
+moved {
+  from = module.network
+  to   = module.network["dev"]
+}
+```
+
+### Workflow
+1. Change the code (rename, `for_each`, module...)
+2. Add the `moved` blocks (keep them in a `moved.tf` file)
+3. `terraform plan`: it should say **`has moved to`** and show **`0 to add, 0 to destroy`**
+4. `terraform apply`: only the state is updated
+5. **Keep the `moved` blocks** for a while. Other workspaces or other people's states may not have applied them yet. Remove them only once **every** state has been updated
+
+### Important Points (Exam)
+1. A refactor that changes a **resource address** without `moved`/`state mv` = **destroy + recreate**
+2. `moved` only changes **state**. It never changes the real resource
+3. Generally `from` and `to` must be the **same resource type**. You can't use `moved` to turn one type into another (only a few providers support cross-type moves, TF 1.8+)
+4. Moving a whole module moves **everything inside it**
+5. Related blocks: **`removed`** = stop managing a resource without destroying it. **`import`** = start managing an existing resource
+6. **Always back up state first** for CLI refactors: `terraform state pull > backup.tfstate`
+
+---
+
+## 6. `moved`, `removed` and `import` Blocks
+Three **config-driven** blocks that change **state** through the normal `plan` → `apply` workflow. Because they are code, they're reviewed in PRs, previewed in `plan`, and applied the same way to every environment. They replace the imperative CLI commands.
+
+| Block | Version | Replaces | What it does | Real infra changed? |
+|---|---|---|---|---|
+| `moved` | 1.1+ | `terraform state mv` | Changes a resource's **address** in state | No |
+| `removed` | 1.7+ | `terraform state rm` | **Stops managing** a resource (forgets it from state) | No (if `destroy = false`) |
+| `import` | 1.5+ | `terraform import` | **Starts managing** an existing resource (adds it to state) | No |
+
+### `moved` block
+```hcl
+moved {
+  from = azurerm_resource_group.rg         # old address
+  to   = azurerm_resource_group.main       # new address
+}
+```
+- Arguments: only **`from`** and **`to`**
+- Works on resources, resource instances (`[0]`, `["web"]`) and whole modules (`module.net`)
+- Plan output: `azurerm_resource_group.rg has moved to azurerm_resource_group.main`
+- **Chaining works:** if A → B and later B → C, keep both blocks, and states still at A will reach C
+- `to` must **not already exist** in state, or you get an error
+- `moved` does **not** support `for_each`. Write one block per instance
+
+### `removed` block
+```hcl
+# 1. Delete the resource block from the config
+# 2. Add this instead:
+removed {
+  from = azurerm_key_vault.kv
+
+  lifecycle {
+    destroy = false     # false = keep the real resource, only forget it from state
+  }                     # true  = destroy it (same as just deleting the block)
+}
+```
+- Use it to **hand a resource over** to another team or config, or to stop managing something without deleting it
+- **The resource block must be removed** from the config, or you get an error (it can't be in both)
+- `from` takes a **resource or module address without instance keys**: `azurerm_key_vault.kv` works, `azurerm_key_vault.kv[0]` doesn't. It applies to all instances
+- Plan output: `azurerm_key_vault.kv will no longer be managed by Terraform`
+- Can contain **destroy-time provisioners** (TF 1.9+) when `destroy = true`
+
+### `import` block
+```hcl
+import {
+  to = azurerm_resource_group.rg
+  id = "/subscriptions/<sub-id>/resourceGroups/rg-existing"   # ID format depends on the provider/resource
+}
+
+resource "azurerm_resource_group" "rg" {        # write it yourself, or generate it (see below)
+  name     = "rg-existing"
+  location = "eastus"
+}
+```
+```bash
+# Let Terraform write the resource block for you
+terraform plan -generate-config-out=generated.tf
+```
+- Arguments: **`to`** (address), **`id`** (cloud resource ID), optional **`provider`** (for an aliased provider)
+- **`for_each` is supported** (TF 1.7+), so you can import many resources with one block:
+  ```hcl
+  import {
+    for_each = var.existing_rgs                   # map: { web = "/subscriptions/.../rg-web", ... }
+    to       = azurerm_resource_group.rg[each.key]
+    id       = each.value
+  }
+  ```
+- `id` can use expressions, but they must be **known at plan time** (TF 1.6+)
+- Only allowed in the **root module**, but `to` can point inside a child module (`module.network.azurerm_virtual_network.vnet`)
+- **Idempotent:** once a resource is imported, the block does nothing, so it's safe to leave in. Remove it in a follow-up PR
+- `-generate-config-out` file **must not already exist**. Generated code is a starting point, so clean it up (use variables, remove default/computed values)
+- Goal: `plan` shows **`N to import, 0 to add, 0 to change, 0 to destroy`**
+
+### Import Workflow 1: `import` block + `-generate-config-out` (recommended)
+Use this when you **don't have the resource code yet**. Terraform reads the real resource and writes the HCL for you.
+```hcl
+# imports.tf (just the import block, NO resource block)
+import {
+  to = azurerm_storage_account.st
+  id = "/subscriptions/<sub-id>/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stapp001"
+}
+```
+```bash
+terraform init
+terraform plan -generate-config-out=generated.tf   # 1. writes the resource block into generated.tf
+# 2. review / clean up generated.tf
+terraform plan                                      # 3. check: "1 to import, 0 to add, 0 to change, 0 to destroy"
+terraform apply                                     # 4. now the resource is in state
+```
+- Generates config **only for import blocks that don't have a resource block yet**
+- `generated.tf` **must not already exist** (Terraform won't overwrite it)
+- The generated code contains **every attribute**, including defaults. Clean it up: replace hardcoded values with variables/references, delete unneeded defaults, and move it into the right file
+- If the generated config has **conflicting attributes**, the plan shows an error. Fix `generated.tf` and run `plan` again
+- **Nothing is in state until `apply`.** `plan` only previews the import
+- Config generation is **still marked experimental** and doesn't work with `for_each` import blocks
+
+### Import Workflow 2: `terraform import` CLI (old way)
+Use this for a **quick, one-off** import when the resource code already exists.
+```bash
+# 1. Write the resource block yourself first (the CLI does NOT generate it)
+# 2. Import (writes to state IMMEDIATELY, no plan, no apply)
+terraform import azurerm_resource_group.rg /subscriptions/<sub-id>/resourceGroups/rg-existing
+
+# count / for_each instances need quotes
+terraform import 'azurerm_subnet.snet[0]' <id>
+terraform import 'azurerm_subnet.snet["web"]' <id>                 # bash
+terraform import 'azurerm_subnet.snet[\"web\"]' <id>               # PowerShell
+
+# Into a module
+terraform import module.network.azurerm_virtual_network.vnet <id>
+
+# 3. Check that the code matches the real resource
+terraform plan    # should be "No changes". Fix the code until it is
+```
+- **The resource block must exist first**, or you get the error *"resource address does not exist in the configuration"*
+- Imports **one resource per command** and **changes state right away**, with no review
+- Has to be run again **by hand for each workspace/state**, so it isn't repeatable in CI/CD
+
+### `import` block vs `terraform import`
+| | `import` block | `terraform import` CLI |
+|---|---|---|
+| Generates config | Yes (`plan -generate-config-out`) | **No**, you write it first |
+| Preview before state changes | Yes (`plan`) | **No**, state changes immediately |
+| Many resources at once | Yes (`for_each`, TF 1.7+) | One per command |
+| Code review / CI/CD | Yes, it's in the code | No |
+| When state changes | On `apply` | When the command runs |
+
+### Important Points (Exam)
+1. **None of the three changes real infra** (except `removed` with `destroy = true`). They only change state
+2. **Blocks vs CLI:** blocks are planned, reviewed and repeatable. CLI commands change state **immediately**, with no plan
+3. `terraform import` (CLI) **doesn't generate config**. Only the `import` block + `-generate-config-out` can do that
+4. `removed` needs the resource block **gone** from the config. `import` needs a resource block (written or generated)
+5. `moved` → you renamed it. `removed` → you don't want to manage it any more. `import` → you want to start managing it
+
 ## Interview Quick Hits
 - **Why `toset` with `for_each`?** `for_each` needs unique keys. Sets guarantee uniqueness, lists don't.
 - **`lookup` vs `map[key]`?** `lookup` lets you set a default. `map[key]` errors if the key is missing (or use `try(map[key], default)`).
 - **`file` vs `templatefile`?** `file` reads the file exactly as it is. `templatefile` fills in `${}` placeholders and `%{ for }` loops.
 - **How do you avoid hardcoding subnet CIDRs?** Use `cidrsubnet(var.vnet_cidr, newbits, index)` with `count`/`for_each`, so changing the VNet range automatically recalculates every subnet.
 - **Locals vs variables?** Variables are inputs the caller can override. Locals are internal values worked out from those inputs, and nobody outside the module can override them.
+- **`count` or `for_each`?** Use `for_each` for anything that can be added or removed on its own. Use `count` only for identical copies or a `? 1 : 0` toggle, because removing an item from a `count` list shifts the indexes and recreates resources.
+- **How do you move resources into a module without downtime?** Add `moved` blocks (old address → `module.x.<address>`), check that the plan shows only "has moved" with nothing destroyed, then apply. Prefer this over `state mv`, because it's reviewed in the PR and applies to every environment.
+- **How do you hand a resource from one Terraform config to another?** In the old config, delete the block and add `removed { lifecycle { destroy = false } }`. In the new config, add an `import` block with the same resource ID. Apply old, then new. The real resource is never touched.
+- **How do you bring 50 manually created Azure resources under Terraform?** Write one `import` block per resource, run `terraform plan -generate-config-out=generated.tf`, clean up the code (refactor repeated resources into `for_each` + `moved` blocks if needed), plan until it shows only imports with 0 changes, then apply. Don't run `terraform import` 50 times by hand.
 - **Avoid `timestamp()` in tags.** It causes a permanent diff on every plan.
