@@ -182,6 +182,40 @@ A resource block declares one infrastructure object (VM, VNet, storage account..
 
 `count` and `for_each` cannot be used together in the same block.
 
+### Explicit Dependency (`depends_on`)
+`depends_on` tells Terraform that one resource must wait for another, even though it never **references** it. Use it only for **hidden dependencies** that Terraform can't see from the code.
+
+```hcl
+# Function App reads the storage account using its managed identity.
+# Nothing in the function_app block references the role assignment,
+# so Terraform could create both in parallel and the app would fail at startup.
+resource "azurerm_role_assignment" "func_blob" {
+  scope                = azurerm_storage_account.main.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_user_assigned_identity.func.principal_id
+}
+
+resource "azurerm_linux_function_app" "main" {
+  # ...
+  depends_on = [azurerm_role_assignment.func_blob]   # list of addresses, no quotes
+}
+```
+
+- It takes a **list** of resource or module addresses: `depends_on = [azurerm_x.a, module.network]`
+- It works on `resource`, `data`, `module` and `output` blocks
+- It makes plans more **conservative**. Terraform waits, and data sources may be read only at apply time, so don't overuse it
+- Terraform also follows the dependency **in reverse on destroy** (the dependent resource is destroyed first)
+
+### Implicit vs Explicit Dependency
+| | Implicit | Explicit |
+|---|---|---|
+| How | Referencing another resource's attribute (`azurerm_resource_group.main.name`) | The `depends_on = [...]` meta-argument |
+| Detected by | Terraform, automatically from the expression | You, by declaring it manually |
+| When to use | **Always preferred**, the default way | Only for hidden dependencies (IAM/role propagation, API side effects) |
+| Example | Storage account uses `azurerm_resource_group.main.name` | Function App waits for a role assignment it never references |
+
+**Exam points:** implicit dependencies come from references and are preferred; `depends_on` is a last resort for dependencies Terraform can't infer; its value is a list of addresses, not strings; both kinds appear in `terraform graph`.
+
 ### Lifecycle Options
 | Option | Effect |
 |--------|--------|
@@ -189,6 +223,78 @@ A resource block declares one infrastructure object (VM, VNet, storage account..
 | `prevent_destroy`       | Errors on any plan that would destroy the resource |
 | `ignore_changes`        | Ignores drift on the listed arguments |
 | `replace_triggered_by`  | Forces replacement when a referenced item changes |
+| `precondition` / `postcondition` | Custom checks before/after the resource is planned/applied (TF 1.2+) |
+
+### Lifecycle Meta-Argument (Details)
+`lifecycle` is a **nested block inside a resource** that changes Terraform's **default create/update/destroy behaviour**.
+
+By default, when an argument forces replacement, Terraform **destroys first, then creates** (`-/+`).
+
+```hcl
+resource "azurerm_resource_group" "main" {
+  name     = "rg-app-dev"
+  location = "centralindia"
+
+  lifecycle {
+    create_before_destroy = true
+    prevent_destroy       = true
+    ignore_changes        = [tags]
+  }
+}
+```
+
+**1. `create_before_destroy`**: creates the replacement first, then destroys the old one. The plan shows `+/-` instead of `-/+`
+- Use it for zero-downtime replacement (e.g. a public IP or certificate)
+- The new object must be able to exist alongside the old one, so **unique names** are needed. Use a `random` suffix or `name_prefix`, otherwise you get a name conflict
+- It is passed on to the resources this one depends on
+
+**2. `prevent_destroy`**: any plan that would destroy the resource **fails with an error**
+- Use it to protect critical resources: databases, Key Vault, state storage
+- It only works while the block **stays in the code**. If you delete the resource block, the protection goes with it and the resource is destroyed
+
+**3. `ignore_changes`**: Terraform ignores changes to the listed arguments when it plans updates
+```hcl
+lifecycle {
+  ignore_changes = [tags, tags["CreatedBy"]]   # specific args or map keys
+  # ignore_changes = all                       # ignore every argument (create-only)
+}
+```
+- Use it when something outside Terraform changes the value: Azure Policy adding tags, autoscale changing `instance_count`
+- It lists **argument names**, not strings. A value is used only at **create** time
+
+**4. `replace_triggered_by`** (TF 1.2+): forces **replacement** of this resource when a referenced resource or attribute changes
+```hcl
+resource "azurerm_linux_virtual_machine" "web" {
+  # ...
+  lifecycle {
+    replace_triggered_by = [azurerm_network_interface.web.id]   # recreate the VM if the NIC is replaced
+  }
+}
+```
+- Only **resource addresses or their attributes** are allowed, not variables. For a variable, wrap it in a `terraform_data` resource
+
+**5. `precondition` / `postcondition`** (TF 1.2+): custom checks with an `error_message`
+```hcl
+lifecycle {
+  precondition {
+    condition     = var.env != "prod" || var.replication == "GRS"
+    error_message = "Prod storage must use GRS."
+  }
+  postcondition {
+    condition     = self.primary_blob_endpoint != ""   # `self` = this resource (postcondition only)
+    error_message = "Blob endpoint was not created."
+  }
+}
+```
+- `precondition` is checked **before** the resource is planned or applied. `postcondition` is checked **after**, and can use `self`
+- A failure **stops** the run (unlike a `check` block, which only warns)
+
+**Exam points:**
+- `lifecycle` is a meta-argument and works on **every resource type**
+- Its values must be **literals or static references**. You can't use variables or expressions in `create_before_destroy`, `prevent_destroy` or `ignore_changes`
+- Default replacement is destroy-then-create. `create_before_destroy` reverses it
+- `prevent_destroy` doesn't help if the resource block is deleted
+- `ignore_changes = all` = manage the resource on create only
 
 ### Example (`main.tf`)
 ```hcl
@@ -404,3 +510,235 @@ output "storage_primary_key" {
 **Exam points:** `value` is required; if an output references a sensitive value without `sensitive = true`, Terraform errors; `sensitive` only hides CLI output, not state; `terraform output` reads from state, so run `apply` first; only **root** module outputs are shown in the CLI.
 
 **Why outputs:** They make key values (IPs, IDs, endpoints) available to people, scripts, CI/CD pipelines, parent modules and other configurations. Variables are a module's inputs, outputs are its return values.
+
+## Validation in Terraform (Custom Conditions)
+Terraform has **4 ways** to enforce your own rules. Each one checks a different thing at a different time:
+
+| Feature | Where | Checks | When | On failure |
+|---|---|---|---|---|
+| **Variable `validation`** | `variable` block | **Input values** | Start of plan, when the variable is evaluated | ❌ **Error**, run stops |
+| **`precondition`** | `lifecycle` of `resource` / `data`, or inside `output` | Assumptions **before** the object is planned/applied | Before the object | ❌ **Error** |
+| **`postcondition`** | `lifecycle` of `resource` / `data` | Guarantees **after** the object is created/read (`self`) | After the object | ❌ **Error** (blocks dependents) |
+| **`check` block** (TF 1.5+) | Top-level block | **Overall health** of the infrastructure | End of every plan and apply | ⚠️ **Warning** only, run continues |
+
+All four use the same structure:
+```hcl
+condition     = <expression that returns true or false>
+error_message = "Full sentence explaining what is wrong."
+```
+
+---
+
+### 1. Variable Validation
+It checks **input values** before Terraform does anything else. This is the first line of defence against bad inputs.
+
+```hcl
+variable "env" {
+  type = string
+  validation {
+    condition     = contains(["dev", "test", "prod"], var.env)
+    error_message = "env must be dev, test or prod."
+  }
+}
+
+variable "storage_name" {
+  type = string
+  validation {                                      # multiple validation blocks are allowed
+    condition     = can(regex("^[a-z0-9]{3,24}$", var.storage_name))
+    error_message = "Storage name must be 3-24 lowercase letters or numbers."
+  }
+  validation {
+    condition     = startswith(var.storage_name, "st")
+    error_message = "Storage name must start with 'st'."
+  }
+}
+
+variable "vnet_cidr" {
+  type = string
+  validation {
+    condition     = can(cidrhost(var.vnet_cidr, 0))   # is it a valid CIDR?
+    error_message = "vnet_cidr must be a valid CIDR, e.g. 10.0.0.0/16."
+  }
+}
+
+variable "vm_count" {
+  type = number
+  validation {
+    condition     = var.vm_count >= 1 && var.vm_count <= 5
+    error_message = "vm_count must be between 1 and 5."
+  }
+}
+```
+
+- **Before TF 1.9**: the condition could reference **only the variable itself**
+- **TF 1.9+**: it can also reference **other variables, locals and data sources**
+  ```hcl
+  condition = var.env != "prod" || var.replication == "GRS"   # cross-variable check (1.9+)
+  ```
+- Helpers: `can()` turns an error into `false`, and `try()` gives a fallback value. Others: `regex()`, `contains()`, `length()`, `alltrue()`, `anytrue()`
+- For lists and maps: `alltrue([for s in var.subnets : can(cidrhost(s, 0))])`
+
+---
+
+### 2. Preconditions
+They check **assumptions before** a resource, data source or output is evaluated. You can use them in `resource` / `data` (inside `lifecycle`) and in `output`.
+
+```hcl
+data "azurerm_resource_group" "shared" {
+  name = var.shared_rg
+}
+
+resource "azurerm_storage_account" "main" {
+  name                     = var.storage_name
+  resource_group_name      = data.azurerm_resource_group.shared.name
+  location                 = data.azurerm_resource_group.shared.location
+  account_tier             = "Standard"
+  account_replication_type = var.replication
+
+  lifecycle {
+    precondition {
+      condition     = data.azurerm_resource_group.shared.location == "centralindia"
+      error_message = "The shared RG must be in Central India (data residency rule)."
+    }
+    precondition {
+      condition     = var.env != "prod" || var.replication == "GRS"
+      error_message = "Prod storage must use GRS replication."
+    }
+  }
+}
+
+output "storage_endpoint" {
+  value = azurerm_storage_account.main.primary_blob_endpoint
+  precondition {                                   # output blocks: precondition only
+    condition     = azurerm_storage_account.main.https_traffic_only_enabled
+    error_message = "Storage must enforce HTTPS before exposing its endpoint."
+  }
+}
+```
+- It **cannot** use `self`, because the object doesn't exist yet
+- It can reference other resources, data sources, variables and locals
+- **Use for:** rules that involve **several values** or **real infrastructure** (data sources), which variable validation (before 1.9) couldn't do
+
+---
+
+### 3. Postconditions
+They check **guarantees after** a resource is created/updated or a data source is read. They're available in `resource` and `data` (inside `lifecycle`).
+
+```hcl
+data "azurerm_virtual_network" "hub" {
+  name                = "vnet-hub"
+  resource_group_name = "rg-network"
+
+  lifecycle {
+    postcondition {
+      condition     = contains(self.address_space, "10.0.0.0/16")
+      error_message = "Hub VNet must use the 10.0.0.0/16 address space."
+    }
+  }
+}
+
+resource "azurerm_storage_account" "logs" {
+  # ...
+  lifecycle {
+    postcondition {
+      condition     = self.min_tls_version == "TLS1_2"     # self = this object
+      error_message = "Storage account must enforce TLS 1.2."
+    }
+  }
+}
+```
+- It **can use `self`** to refer to the object's own attributes
+- If it fails, Terraform **stops** and resources that **depend on it are not created**. The object itself may already exist
+- If an attribute is unknown until apply, Terraform checks the condition at **apply** time instead of plan
+
+---
+
+### 4. Check Blocks (TF 1.5+)
+A `check` block is a top-level block that checks the **health of the whole infrastructure**. It **never blocks** a run. A failure only produces a **warning**.
+
+```hcl
+check "storage_https_only" {
+  assert {
+    condition     = azurerm_storage_account.main.https_traffic_only_enabled
+    error_message = "Storage account allows plain HTTP traffic."
+  }
+}
+
+# A scoped (nested) data source: it exists only inside this check
+check "website_up" {
+  data "http" "site" {
+    url = "https://${azurerm_linux_web_app.main.default_hostname}"
+  }
+
+  assert {
+    condition     = data.http.site.status_code == 200
+    error_message = "Web app returned ${data.http.site.status_code}, expected 200."
+  }
+}
+```
+- It uses **`assert`** blocks (one or more), not `condition` directly
+- It can contain **one scoped data source**. If that data source fails, you get a **warning**, not an error
+- It runs at the end of **every `plan` and `apply`**
+- **HCP Terraform:** check blocks power **continuous validation** (health assessments) that keep running between runs
+- **Use for:** post-deployment smoke tests, certificate expiry, endpoint up/down. These are things you want to **know about**, not things that should **stop** a deploy
+
+---
+
+### Choosing the Right One
+| Question | Use |
+|---|---|
+| Is the **input value** valid (format, allowed list, range)? | Variable `validation` |
+| Is an **assumption true before** creating something (existing RG region, combination of values)? | `precondition` |
+| Did the resource/data **turn out as expected** after create/read? | `postcondition` |
+| Is the infrastructure **healthy overall**, warning only? | `check` block |
+| Unit/integration tests in a separate file? | `terraform test` (`run` + `assert` in `.tftest.hcl`) |
+
+### Order of Operations
+```
+terraform plan
+ 1. Variable validation      → root variables are checked first (child-module variables when that module is evaluated)
+ 2. For each object, in dependency (graph) order:
+      a. precondition        → before the object is planned
+      b. plan the change / read the data source
+      c. postcondition       → after planning (if values are unknown until apply, deferred to apply)
+ 3. Output precondition      → when each output is evaluated
+ 4. check blocks             → at the END of the plan (warning only)
+
+terraform apply
+ 0. (apply without a saved plan runs all the plan steps above first)
+ 1. Variable validation      → part of that plan (a saved plan already passed it)
+ 2. For each object, in dependency order:
+      a. precondition        → re-checked before the change is applied
+      b. create / update / destroy
+      c. postcondition       → checked using real values (self); failure stops dependent resources
+ 3. Output precondition
+ 4. check blocks             → at the END of the apply (warning only)
+```
+
+| Step | Validation | Fails → |
+|---|---|---|
+| 1 | Variable `validation` | Error. Nothing is planned |
+| 2 | `precondition` (resource/data) | Error. This object and its dependents are skipped |
+| 3 | `postcondition` (resource/data) | Error. The object may already exist, but dependents are not created |
+| 4 | `output` precondition | Error. The output is not saved |
+| 5 | `check` → `assert` | ⚠️ Warning. Run completes |
+
+- There is **no global "all preconditions first" phase**. Pre/postconditions run **per object** as Terraform walks the **dependency graph**, so independent objects can be checked in parallel
+- Preconditions and postconditions run in **both plan and apply**. Check blocks also run at the end of **both**
+- A **postcondition on a data source** is checked right after the read, so a resource that uses that data never gets planned if it fails
+
+---
+
+**Exam points:**
+1. `validation` lives **inside a `variable` block**. You can have **multiple** validation blocks, and each needs `condition` + `error_message`
+2. Before TF 1.9, a validation could reference **only its own variable**. From 1.9 it can reference other variables, locals and data sources
+3. `precondition` and `postcondition` go **inside `lifecycle`** for resources and data sources. `output` blocks allow **only `precondition`**, and it's written directly in the output block
+4. **`self`** is available **only in `postcondition`** (and in provisioners/connection), not in `precondition`
+5. A failed validation, precondition or postcondition is an **error** that stops the run. A failed **`check`** is only a **warning**
+6. `check` blocks use **`assert`**, can hold **one scoped data source**, and run on every plan and apply (TF 1.5+)
+7. `can()` returns `true`/`false` instead of an error, so it's often used in conditions (`can(regex(...))`, `can(cidrhost(...))`)
+8. `error_message` should be a full sentence (start with a capital letter, end with a period)
+
+**Interview POV:**
+> **Q: How do you stop bad deployments in Terraform?**
+> In layers. Variable `validation` rejects bad inputs early. `precondition`s enforce rules about existing infrastructure and combinations of values. `postcondition`s guarantee the result. `check` blocks give non-blocking health warnings and continuous validation in HCP Terraform. On top of that, `terraform test` covers module tests, and policy as code (Sentinel/OPA, Azure Policy) covers org-wide rules.
