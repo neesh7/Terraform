@@ -25,24 +25,25 @@ State (`terraform.tfstate`) is a JSON file where Terraform maps **real-world res
 - `terraform.tfstate.backup` = the previous version, written automatically by local state
 
 ## Important Points (Exam)
-1. State is stored **in plain text**, so **secrets and sensitive values are visible** in it. `sensitive = true` only hides values in CLI output, **not in state**
+1. State is stored **in plain text**, so **secrets and sensitive values are visible** in it. `sensitive = true` only hides values in CLI output, **not in state** (how to protect it → [05 › sections 6-7](05-Terraform_Security.md))
 2. **Never commit state to Git**. Add `*.tfstate`, `*.tfstate.*` and `.terraform/` to `.gitignore` (but **do** commit `.terraform.lock.hcl`)
 3. **Never edit state by hand**. Use `terraform state` commands
 4. The default backend is **local** (`terraform.tfstate` in the working directory)
 5. **State locking** stops two people writing at once. It happens automatically on any command that writes state (plan, apply, destroy...)
-6. Backend blocks **cannot use variables, locals or data sources**, only literal values
-7. Changing the backend config needs `terraform init` again
-8. Data sources are also stored in state
+6. Backend blocks take **literal values only**, and changing them needs `terraform init` again (rules → [01 › Terraform Settings Block](01-Terraform_Configurations.md))
+7. Data sources are also stored in state
 
 ## Local vs Remote Backend
 | | Local | Remote (azurerm / s3 / gcs / HCP Terraform) |
 |---|---|---|
-| Storage | Your disk | Shared storage |
-| Team collaboration | No | Yes |
+| Storage | Your disk (`terraform.tfstate` in the working directory) | Shared, centralized storage |
+| Team collaboration | No, hard to share safely | Yes |
 | Locking | Yes (on the local system) | Yes (if the backend supports it) |
 | Encryption at rest | No | Usually yes |
+| Access control | None | IAM / RBAC |
+| Audit logging | None | Generally available |
 | Versioning / recovery | `.backup` file only | Blob versioning / S3 versioning |
-| Secrets on laptops | Yes (risky) | No |
+| Secrets on laptops | Yes (risky), and easy to commit to Git by accident | No |
 
 ### Azure Backend (azurerm)
 ```hcl
@@ -53,11 +54,14 @@ terraform {
     container_name       = "tfstate"
     key                  = "prod/network.tfstate"   # blob name
     use_azuread_auth     = true                     # use Entra ID instead of the access key
+    # use_oidc = true                               # CI/CD (GitHub Actions / Azure DevOps) with workload identity
+    # use_msi  = true                               # managed identity (self-hosted agent / VM)
   }
 }
 ```
 - Locking = **Blob lease** (native, no extra setup)
 - Turn on **blob versioning + soft delete** on the storage account so you can recover state
+- Full hardening (CMK, RBAC, private endpoint, resource lock, hardened storage account code) → [05 › section 6](05-Terraform_Security.md)
 
 ### AWS Backend (s3)
 ```hcl
@@ -66,8 +70,9 @@ terraform {
     bucket       = "my-tf-state"
     key          = "prod/terraform.tfstate"
     region       = "us-east-1"
-    encrypt      = true
-    use_lockfile = true    # native S3 locking (TF 1.10+). Older setups used dynamodb_table
+    encrypt      = true        # server-side encryption (AES-256)
+    kms_key_id   = "<kms_id>"  # optional: encrypt with your own KMS key
+    use_lockfile = true        # native S3 locking (TF 1.10+). Older setups used dynamodb_table
   }
 }
 ```
@@ -93,8 +98,7 @@ terraform init -backend-config=backend-dev.hcl
 | `terraform show` | Human-readable view of the state (or of a saved plan) |
 | `terraform output` | Read outputs from state |
 | `terraform force-unlock <LOCK_ID>` | Release a stuck lock |
-| `terraform init -migrate-state` | Copy existing state to a new/changed backend (e.g. local → azurerm) |
-| `terraform init -reconfigure` | Re-init the backend **without** migrating the existing state |
+| `terraform init -migrate-state` / `-reconfigure` | Move state to a new backend / re-init without moving it (see **Migrating State** below) |
 | `terraform import <addr> <id>` | Bring an existing resource into state (old CLI way) |
 | `terraform apply -refresh-only` | Update state to match real infra, with no infra changes (replaces `terraform refresh`) |
 | `terraform apply -replace=<addr>` | Force recreate one resource (replaces `terraform taint`) |
@@ -113,8 +117,6 @@ terraform state rm azurerm_key_vault.kv
 terraform state pull > backup.tfstate
 ```
 
-> **Deprecated (exam trap):** `terraform refresh` → use `apply -refresh-only`. `terraform taint` → use `apply -replace`.
-
 ## Config-Driven Blocks (the modern way, reviewed in plan)
 These go in code instead of running CLI commands, so they're reviewable in PRs and show up in `plan`.
 
@@ -127,34 +129,7 @@ These go in code instead of running CLI commands, so they're reviewable in PRs a
 | `terraform state rm` | `removed {}` | 1.7+ |
 | `terraform taint` | `apply -replace=<addr>` (flag, not a block) | 0.15.2+ |
 
-### `import` block (TF 1.5+)
-```hcl
-import {
-  to = azurerm_resource_group.rg
-  id = "/subscriptions/<sub-id>/resourceGroups/rg-existing"
-}
-```
-```bash
-terraform plan -generate-config-out=generated.tf   # writes the HCL for you
-```
-
-### `moved` block (TF 1.1+), the code version of `state mv`
-```hcl
-moved {
-  from = azurerm_storage_account.old
-  to   = azurerm_storage_account.new
-}
-```
-
-### `removed` block (TF 1.7+), the code version of `state rm`
-```hcl
-removed {
-  from = azurerm_key_vault.kv
-  lifecycle {
-    destroy = false   # forget it from state but keep the real resource
-  }
-}
-```
+Syntax, rules, import workflows and refactoring scenarios for all three blocks → [03 › sections 5-6](03-Making-Code-Reusable.md).
 
 ## Remote State Data Source
 Read the **outputs** of another configuration's state (e.g. the app stack reads the network stack's subnet ID):
@@ -349,7 +324,7 @@ Drift detected (plan / scheduled job)
 → `state pull` for a backup → `terraform state mv -state-out=...` (local), or `removed` in the old config + `import` in the new one. Then link the stacks with `terraform_remote_state` / data sources.
 
 **8. Secrets in state**
-→ You can't keep them out of state completely. Lock down access to the backend (RBAC, private endpoint, Entra ID auth), turn on encryption, use Key Vault and fetch secrets at runtime where you can, use **ephemeral resources / write-only args (TF 1.10+/1.11+)** which are never stored in state, and never commit state.
+→ Lock down and encrypt the backend, fetch secrets at runtime, and use **ephemeral resources / write-only args** so they never reach state. Full answer → [05 › sections 5-7](05-Terraform_Security.md).
 
 **9. Someone deleted a resource in the portal**
 → Next `plan` refreshes, sees it's gone, and plans to **create** it again. If it shouldn't come back, remove it from the code too.
@@ -432,13 +407,8 @@ In order of preference:
 - Import blocks go through `plan`, so they're reviewable and repeatable. **Prefer them over running `terraform import` by hand for prod**
 
 ### Prevent it from happening again
-- Blob **versioning + soft delete** + storage account soft delete
-- A **`CanNotDelete` resource lock** on the state storage account / RG
-- Keep state in a **separate subscription / RG**, with **least-privilege RBAC** (only the pipeline identity can write)
-- **Entra ID auth** (`use_azuread_auth = true`) instead of access keys. Private endpoint + firewall
-- **Diagnostic logs / alerts** on blob delete
-- Scheduled **state backups** to a second storage account
-- `prevent_destroy = true` on critical resources
+- Harden the state backend: versioning + soft delete, `CanNotDelete` lock, least-privilege RBAC, Entra ID auth, private endpoint, diagnostic logs (code → [05 › section 6](05-Terraform_Security.md))
+- Plus: storage account soft delete, keep state in a **separate subscription / RG**, **alerts** on blob delete, scheduled **state backups** to a second storage account, `prevent_destroy = true` on critical resources
 
 ---
 

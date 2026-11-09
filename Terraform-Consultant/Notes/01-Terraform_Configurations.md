@@ -180,7 +180,7 @@ A resource block declares one infrastructure object (VM, VNet, storage account..
 | `provider`    | Picks a non-default (aliased) provider |
 | `lifecycle`   | Changes create/update/destroy behaviour |
 
-`count` and `for_each` cannot be used together in the same block.
+`count` / `for_each` details (rules, index problem, comparison) → [03 › section 4](03-Making-Code-Reusable.md).
 
 ### Explicit Dependency (`depends_on`)
 `depends_on` tells Terraform that one resource must wait for another, even though it never **references** it. Use it only for **hidden dependencies** that Terraform can't see from the code.
@@ -319,7 +319,7 @@ resource "azurerm_storage_account" "main" {
   }
 }
 ```
-**Exam points:** prefer `for_each` over `count` when items can be added or removed (removing from a `count` list shifts indexes and recreates resources); `depends_on` takes a list of resource addresses; `terraform state list` shows resource addresses; provisioners are a last resort.
+**Exam points:** `terraform state list` shows resource addresses; provisioners are a last resort. (`count` vs `for_each` → 03; `depends_on` → above.)
 
 **Why resource blocks:** Each resource block maps one real infrastructure object to a state entry, so Terraform can compare desired vs actual state and plan only the changes needed. Dependencies come from references, and Terraform uses them to build the graph that orders creation and runs independent resources in parallel.
 
@@ -447,23 +447,12 @@ Set values in `terraform.tfvars`: `environment = "dev"`, or on the CLI: `terrafo
 **Why variables:** They separate configuration from values, so one codebase can deploy dev/test/prod by swapping `.tfvars` files. Use **variables** for values the caller provides and **locals** for values computed inside the module.
 
 ### Managing Variables Across Environments
-Same code, different values (and a **separate state file**) per environment:
-1. **Per-environment `.tfvars` files:** `dev.tfvars`, `prod.tfvars`, passed with `terraform apply -var-file="prod.tfvars"`
-2. **Directory per environment:** `envs/dev/`, `envs/prod/`, each with its own `terraform.tfvars` and backend, calling shared modules (strongest isolation, most common in real projects)
-3. **CLI workspaces:** one config, separate state per workspace; use `terraform.workspace` in locals to vary values (not ideal for strict isolation, since all workspaces share the same backend and credentials)
-4. **HCP Terraform:** variables set per workspace, and **variable sets** share common values across workspaces
-5. **CI/CD pipelines:** inject values as `TF_VAR_<name>` env variables; secrets come from Key Vault or the pipeline's secret store, never from committed `.tfvars`
+Same code, different values (and a **separate state file**) per environment: per-env `.tfvars`, directory per env, CLI workspaces, HCP Terraform variable sets, or CI/CD `TF_VAR_*`. All five approaches → [00 › Managing Multiple Environments](00-Terraform_foundations.md). Workspaces in depth → [02](02-Terraform_State.md).
 
 **Exam points:** a non-auto `.tfvars` file needs `-var-file`; `terraform.workspace` returns the current workspace name; variable sets are an HCP Terraform feature.
 
 ### Scope of Variables
-- Variables are **module-scoped**: a variable is only visible inside the module that declares it
-- **Root module** variables get values from `.tfvars`, `-var`, `TF_VAR_` env variables or `default`
-- **Child module** variables get values **only** from arguments in the calling `module` block; `.tfvars` and `TF_VAR_` don't reach them
-- A child module can't read the parent's variables (or the parent the child's); data flows **down through module arguments** and **up through outputs**
-- `locals` are module-scoped too and can't be set from outside
-
-**Exam point:** to pass a value into a child module you must declare a `variable` in the child and set it in the `module` block.
+Variables (and `locals`) are **module-scoped**. Root variables come from `.tfvars` / `-var` / `TF_VAR_` / `default`. Child module variables come **only** from the calling `module` block's arguments. Full isolation rules → [04 › section 4 Variable Isolation](04-Terraform_Modules.md).
 
 ## Terraform Outputs
 An output block **exposes a value** from a module, like a function's return value. Root module outputs are printed after `apply`; child module outputs pass data back to the calling module.

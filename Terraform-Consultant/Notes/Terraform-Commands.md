@@ -10,7 +10,7 @@ terraform -help                               # List all commands
 terraform --help                              # Same as -help (also -h)
 terraform <subcommand> -help                  # Help for a specific command
 terraform -chdir=envs/dev plan                # Run a command against another directory
-terraform version                             # Show CLI version and provider versions in use
+terraform version                             # Show CLI version and provider versions in use (pin the CLI with required_version)
 terraform -install-autocomplete               # Enable tab-completion for commands (bash/zsh, restart shell after)
 terraform -uninstall-autocomplete             # Remove tab-completion
 ```
@@ -25,7 +25,7 @@ terraform fmt -diff                           # Show formatting changes
 
 ## Init
 ```bash
-terraform init                                # Download providers & modules, configure backend, create/update .terraform.lock.hcl
+terraform init                                # Download providers & modules, configure backend, create/update .terraform.lock.hcl (safe to run multiple times)
 terraform init -upgrade                       # Upgrade providers/modules within version constraints
 terraform init -reconfigure                   # Reinitialize backend, ignoring existing config
 terraform init -migrate-state                 # Migrate state to a new backend
@@ -35,7 +35,7 @@ terraform init -backend=false                 # Skip backend initialization
 
 ## Validate
 ```bash
-terraform validate                            # Check config for syntax and internal consistency (needs init first)
+terraform validate                            # Check config for syntax and internal consistency (needs init first, no provider API calls)
 terraform validate -json                      # Machine-readable output
 ```
 
@@ -75,18 +75,19 @@ terraform destroy -target=<resource_type>.<name>    # Destroy a single specific 
 terraform show                                # Human-readable view of current state
 terraform show myplan.tfplan                  # Inspect a saved plan
 terraform show -json                          # Machine-readable output
-terraform output                              # Show all outputs
+terraform output                              # Show all outputs (sensitive ones shown as <sensitive>)
 terraform output <name>                       # Show a single output (reveals sensitive values)
 terraform output -raw <name>                  # Plain string, no quotes (scripts)
-terraform output -json                        # All outputs as JSON
+terraform output -json                        # All outputs as JSON (reveals sensitive values)
 terraform output -json <name>                 # Single output as JSON (lists/maps/objects)
 terraform output -no-color                    # Outputs without color codes (logs/pipelines)
-terraform console                             # Interactive shell to test expressions/functions
+terraform console                             # Interactive shell to test expressions/functions, e.g. > cidrsubnet("10.0.0.0/16", 8, 1)
 terraform graph | dot -Tsvg > graph.svg       # Export dependency graph (DOT) and render with Graphviz
 ```
 
 ## State Management
 ```bash
+# `state` subcommands are the safe way to change state - never edit the state file by hand
 terraform state list                          # List resources in state
 terraform state show <addr>                   # Show details of one resource
 terraform state mv <src> <dest>               # Rename/move a resource in state (no recreate)
@@ -96,15 +97,15 @@ terraform state push                          # Upload local state to remote (us
 terraform state replace-provider <old> <new>  # Replace provider in state
 terraform import <addr> <id>                  # Import existing resource into state (write the block yourself)
 terraform plan -generate-config-out=gen.tf    # With `import` blocks (v1.5+): auto-generate config
-terraform force-unlock <LOCK_ID>              # Remove a stuck state lock
+terraform force-unlock <LOCK_ID>              # Remove a stuck state lock (only when sure no other run is active)
 ```
 > No `terraform move` command - use `terraform state mv` or a `moved {}` block in config.
 
 ## Modules & Providers
 ```bash
-terraform get                                 # Download modules referenced in config
+terraform get                                 # Download modules referenced in config (init already does this; get = modules only, no providers/backend)
 terraform get -update                         # Update modules
-terraform modules                             # List declared modules (v1.10+)
+terraform modules                             # List declared modules (v1.10+), -json for machine-readable output
 terraform providers                           # Show providers required by config & modules
 terraform providers lock                      # Update lock file (e.g. for multiple platforms)
 terraform providers mirror <dir>              # Copy providers locally for offline/air-gapped use
@@ -119,10 +120,11 @@ terraform workspace new <name>                # Create and switch to a new works
 terraform workspace select <name>             # Switch workspace
 terraform workspace delete <name>             # Delete a workspace (cannot delete `default`)
 ```
+> Current workspace name in config: `terraform.workspace`. Details → [02 › Workspaces](02-Terraform_State.md)
 
 ## HCP Terraform
 ```bash
-terraform login                               # Get & save API token for app.terraform.io
+terraform login                               # Get & save API token for app.terraform.io (saved to credentials.tfrc.json)
 terraform login <hostname>                    # Login to a Terraform Enterprise host
 terraform logout                              # Remove saved credentials
 ```
@@ -131,6 +133,7 @@ terraform logout                              # Remove saved credentials
 ```bash
 terraform test                                # Run *.tftest.hcl test files (v1.6+)
 ```
+> Tests use `run` blocks (`command = plan` or `command = apply`) with `assert` conditions. Resources created by tests are destroyed automatically afterwards.
 
 ## Few Advanced Commands
 ```bash
@@ -159,28 +162,8 @@ terraform init                                # With a `cloud {}` block: connect
 terraform metadata functions -json            # List all available built-in functions (JSON)
 ```
 
-**Config blocks instead of state commands** (declarative, show up in the plan for review):
+**Config blocks instead of state commands** (declarative, show up in the plan for review): `import {}` (v1.5+) replaces `terraform import`, `moved {}` (v1.1+) replaces `terraform state mv`, `removed {}` (v1.7+) replaces `terraform state rm`. Syntax and details → [03 › section 6](03-Making-Code-Reusable.md)
 ```hcl
-# Import existing resource (v1.5+) - instead of `terraform import`
-import {
-  to = azurerm_resource_group.main
-  id = "/subscriptions/<sub-id>/resourceGroups/rg-demo"
-}
-
-# Rename/move resource (v1.1+) - instead of `terraform state mv`
-moved {
-  from = azurerm_virtual_network.old
-  to   = azurerm_virtual_network.main
-}
-
-# Stop managing without destroying (v1.7+) - instead of `terraform state rm`
-removed {
-  from = azurerm_storage_account.legacy
-  lifecycle {
-    destroy = false
-  }
-}
-
 # Connect to HCP Terraform
 terraform {
   cloud {

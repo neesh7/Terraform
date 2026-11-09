@@ -335,15 +335,7 @@ resource "azurerm_storage_account" "st" {
 ---
 
 ## 4. Meta-Arguments: `count` and `for_each`
-**Meta-arguments** are special arguments built into Terraform. They work on **any resource** (and on modules) and change how Terraform handles that block, not how the provider configures the resource.
-
-| Meta-argument | Purpose |
-|---|---|
-| `count` | Create **N copies** of a resource |
-| `for_each` | Create **one copy per item** in a map or set |
-| `depends_on` | Add a dependency Terraform can't work out by itself |
-| `provider` | Pick a non-default (aliased) provider configuration |
-| `lifecycle` | Change create/destroy behaviour (`create_before_destroy`, `prevent_destroy`, `ignore_changes`) |
+**Meta-arguments** are special arguments built into Terraform. They work on **any resource** (and on modules) and change how Terraform handles that block, not how the provider configures the resource. The full list (`depends_on`, `provider`, `lifecycle`...) is in [01 › Meta-Arguments](01-Terraform_Configurations.md). This section covers the two **looping** ones: `count` (N copies) and `for_each` (one copy per map/set item).
 
 ### `count`
 ```hcl

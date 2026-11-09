@@ -85,15 +85,13 @@ Write Config Files -> FMT -> Init -> Validate -> Plan -> Apply/Destroy
 
 ## Validate (`terraform validate`)
 - Checks whether the configuration is syntactically valid and internally consistent (correct argument names/types, valid references, required arguments present)
-- Runs **locally** - does not call provider APIs or check remote state, so it won't catch things like an invalid VM size or a name that's already taken
+- Runs **locally** - does not call provider APIs or check remote state, so it won't catch all errors. A config can pass `validate` and still fail at `plan`/`apply` — e.g. invalid SKU/region, name already taken, missing permissions, or quota limits
 - Requires `terraform init` first (it needs the provider schemas)
 - Great as an early, fast check in CI/CD before `plan`; use `-json` for machine-readable output
 ```bash
 terraform validate
 # Success! The configuration is valid.
 ```
-
-> 📝 **Note:** `validate` does not communicate with providers (no API calls), so it is not going to catch all errors. A config can pass `validate` and still fail at `plan`/`apply` — e.g. invalid SKU/region, name already taken, missing permissions, or quota limits.
 
 ## Plan Stage
 - `terraform plan` generates an execution plan showing the changes Terraform will make to real-world resources in order to match the desired state configuration
@@ -131,9 +129,7 @@ Example graph (arrows point to what a resource depends on):
 - Horizontal arrow (VM → VM) = explicit dependency via `depends_on`, where there's no attribute reference between them
 
 ### Dependencies
-Two types of dependencies:
-- **Implicit Dependencies (Automatic)** - a reference to another resource that Terraform already knows about
-- **Explicit Dependencies (Manual)** - used when there's a dependency that Terraform can't automatically detect from resource references alone. Use `depends_on` to create an explicit dependency
+**Implicit** (automatic, from references) vs **explicit** (`depends_on`, for hidden dependencies). Details and comparison → [01 › Explicit Dependency / Implicit vs Explicit](01-Terraform_Configurations.md)
 
 ### Parallel Resource Operations
 How Terraform walks the graph:
@@ -172,7 +168,7 @@ What happens behind the scenes when Terraform modifies your infrastructure:
 
 ### Best Practices for `terraform apply`
 1. **Always review the plan first** - save it with `terraform plan -out=tfplan`, get it reviewed, then run `terraform apply tfplan` so exactly what was approved gets applied
-2. **Use a remote backend with state locking** - (e.g. Azure Storage / S3 + DynamoDB) so two people or pipelines can't apply against the same state at once
+2. **Use a remote backend with state locking** - (e.g. Azure Storage blob lease / S3 `use_lockfile`) so two people or pipelines can't apply against the same state at once
 3. **Avoid `-auto-approve` outside of pipelines** - only use it in CI/CD where a reviewed saved plan or an approval gate already exists; never casually on production
 4. **Apply through CI/CD, not from laptops** - run `fmt`, `validate`, and `plan` in the pipeline with consistent credentials, provider versions (`.terraform.lock.hcl`), and an audit trail
 5. **Keep changes small and target the right environment** - smaller applies reduce blast radius (remember: no automatic rollback); double-check the workspace/backend/var-file before applying, and use `-target` only for exceptional fixes
@@ -201,10 +197,8 @@ terraform <subcommand> [options or flags]
 ## CLI Basics (Exam Focus - Terraform Associate 004)
 - `terraform -help` / `terraform <subcommand> -help` - list commands / show help for a specific command
 - `-chdir=<dir>` - global option to run a command against another directory: `terraform -chdir=envs/dev plan`
-- **Variables input** - `-var="name=value"`, `-var-file=dev.tfvars`, or env var `TF_VAR_name`
-- **Auto-loaded var files** - `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`, `*.auto.tfvars.json`
-- **Variable precedence (lowest → highest)** - default value → env vars (`TF_VAR_`) → `terraform.tfvars` → `*.auto.tfvars` (alphabetical) → `-var` / `-var-file` on the CLI (last one wins)
-- **Logging** - `TF_LOG=TRACE|DEBUG|INFO|WARN|ERROR` enables logs, `TF_LOG_PATH=./tf.log` writes them to a file
+- **Variables input** - `-var="name=value"`, `-var-file=dev.tfvars`, or env var `TF_VAR_name`. Auto-loaded files and the full **precedence order** → [01 › Assigning Values & Precedence](01-Terraform_Configurations.md)
+- **Logging** - `TF_LOG` / `TF_LOG_PATH` (see the env var table below)
 - **Automation** - `-input=false` (no prompts), `-auto-approve` (skip confirmation), `-no-color`, `-json` (machine-readable output)
 - **Deprecated commands to know** - `terraform refresh` → use `terraform apply -refresh-only`; `terraform taint` → use `terraform apply -replace=<addr>`
 
@@ -242,6 +236,7 @@ Remove-Item Env:TF_VAR_location
 | `TF_IN_AUTOMATION` | Any non-empty value tweaks output for CI (hides "next step" hints) | `TF_IN_AUTOMATION=true` |
 | `TF_PLUGIN_CACHE_DIR` | Shared provider cache, so providers aren't re-downloaded for every project | `TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache` |
 | `TF_CLI_CONFIG_FILE` | Custom location for the CLI config file (`.terraformrc` / `terraform.rc`) | `TF_CLI_CONFIG_FILE=./dev.tfrc` |
+| `TF_TOKEN_<host>` | API token for HCP Terraform / TFE (dots → `_`), instead of `terraform login` | `TF_TOKEN_app_terraform_io=...` |
 
 **Passing complex types with `TF_VAR_`** - list/map/object values are written in HCL syntax:
 ```bash
@@ -258,66 +253,13 @@ export AWS_ACCESS_KEY_ID="..."  AWS_SECRET_ACCESS_KEY="..."  AWS_REGION="us-east
 ```
 
 **Exam points to remember:**
-- `TF_VAR_` env vars have the **lowest** precedence after defaults - `terraform.tfvars`, `*.auto.tfvars`, and `-var`/`-var-file` all override them
-- `TF_LOG` without `TF_LOG_PATH` → logs go to stderr; `TF_LOG_PATH` alone does nothing
+- `TF_VAR_` env vars have the **lowest** precedence after defaults (full order in 01)
+- `TF_LOG` without `TF_LOG_PATH` → logs go to stderr; `TF_LOG_PATH` alone does nothing (debugging details → [05 › section 9](05-Terraform_Security.md))
 - To turn logging off, unset `TF_LOG` (or set it to `OFF`)
-- Never commit secrets - use env vars (or a secrets manager) for credentials and sensitive variables
+- Never commit secrets - use env vars (or a secrets manager) for credentials and sensitive variables (security view → [05 › section 4](05-Terraform_Security.md))
 
 ## Terraform Subcommands
-
-### Core Workflow
-- **`init`** - initializes the working directory: downloads providers & modules, configures the backend, creates/updates `.terraform.lock.hcl`. Safe to run multiple times
-  - `-upgrade` (upgrade providers/modules within version constraints), `-reconfigure` (ignore existing backend config), `-migrate-state` (move state to a new backend), `-backend-config=<file>` (partial backend config), `-backend=false`
-- **`fmt`** - rewrites `.tf` files to the canonical HCL style
-  - `-recursive` (include subdirectories), `-check` (exit non-zero if unformatted - good for CI), `-diff` (show changes)
-- **`validate`** - checks syntax and internal consistency. Needs `init`, doesn't call provider APIs
-- **`plan`** - creates an execution plan (dry run)
-  - `-out=<file>` (save plan), `-destroy` (preview a destroy), `-refresh-only` (only detect drift), `-replace=<addr>` (force recreate), `-target=<addr>`, `-detailed-exitcode` (0 = no changes, 1 = error, 2 = changes present)
-- **`apply`** - executes the changes to reach the desired state. Prompts unless a saved plan file is given or `-auto-approve` is used
-  - `-destroy` (same as `terraform destroy`), `-refresh-only`, `-replace=<addr>`, `-parallelism=n`
-- **`destroy`** - destroys all resources managed by the configuration. Alias for `terraform apply -destroy`
-
-### Inspecting State & Outputs
-- **`show`** - human-readable view of the current state or a saved plan file (`terraform show myplan.tfplan`). `-json` for machine-readable output
-- **`output`** - prints output values from the state. `terraform output <name>`, `-json`, `-raw` (plain string, good for scripts). Sensitive outputs are hidden as `(sensitive)` unless asked for by name or with `-json`
-- **`console`** - interactive shell to test expressions and functions against the current state, e.g. `> cidrsubnet("10.0.0.0/16", 8, 1)`
-- **`graph`** - outputs the dependency graph in DOT format. Visualize with Graphviz: `terraform graph | dot -Tsvg > graph.svg`
-
-### State Management
-- **`state`** - advanced state management (preferred over manually editing the state file)
-  - `state list` (list resources in state), `state show <addr>` (details of one resource)
-  - `state mv <src> <dest>` (rename/move a resource in state without recreating it)
-  - `state rm <addr>` (stop managing a resource - the real resource is **not** destroyed)
-  - `state pull` / `state push` (download / upload remote state), `state replace-provider`
-- **`import`** - brings an existing real-world resource under Terraform management: `terraform import <addr> <id>`. Only writes to state - you must write the resource block yourself
-  - Modern way (v1.5+): `import` block in config + `terraform plan -generate-config-out=generated.tf` to auto-generate the config
-- **Moving resources (`move`)** - there is no `terraform move` command. Use `terraform state mv` (CLI), or the `moved` block in config (v1.1+, preferred - declarative and reviewed in the plan)
-  ```hcl
-  moved {
-    from = azurerm_virtual_network.old
-    to   = azurerm_virtual_network.main
-  }
-  ```
-- **`force-unlock`** - manually removes a stuck state lock: `terraform force-unlock <LOCK_ID>`. Only use when you're sure no other operation is running
-
-### Modules & Providers
-- **`get`** - downloads/updates the modules referenced in the root module (`-update`). `init` already does this - `get` only handles modules, not providers or backend
-- **`modules`** - lists the modules declared in the configuration (v1.10+), `-json` for machine-readable output
-- **`providers`** - shows the providers required by the config and its modules
-  - `providers lock` (update the lock file for multiple platforms), `providers mirror <dir>` (copy providers for offline/air-gapped use), `providers schema -json`
-- **`version`** - shows the Terraform CLI version and the provider versions in use. Use the `required_version` setting to pin the CLI version
-
-### Workspaces
-- **`workspace`** - manages multiple state files for the same configuration (e.g. dev/test/prod). The default workspace is `default` and cannot be deleted
-  - `workspace list`, `workspace show`, `workspace new <name>`, `workspace select <name>`, `workspace delete <name>`
-  - Current workspace name is available in config as `terraform.workspace`
-
-### HCP Terraform (Terraform Cloud)
-- **`login`** - gets an API token for HCP Terraform / Terraform Enterprise and saves it to `credentials.tfrc.json`. `terraform login` (defaults to `app.terraform.io`) or `terraform login <hostname>`
-- **`logout`** - removes the saved credentials for that host
-
-### Testing
-- **`test`** - runs `*.tftest.hcl` test files (v1.6+). Tests use `run` blocks with `command = plan` or `command = apply` and `assert` conditions. Resources created in tests are destroyed automatically afterwards
+Every subcommand with its flags and a one-line explanation is in **[Terraform-Commands.md](Terraform-Commands.md)** (the single command reference). The workflow commands (`init`, `validate`, `plan`, `apply`, `destroy`) are explained above, state commands in [02](02-Terraform_State.md), and `import`/`moved`/`removed` in [03 › section 6](03-Making-Code-Reusable.md).
 
 ## Terraform File Structure
 Terraform loads **all `.tf` files in a directory** together and treats them as one configuration. File names don't matter to Terraform, but splitting them by purpose is the standard convention for readability.
@@ -346,8 +288,9 @@ Terraform loads **all `.tf` files in a directory** together and treats them as o
 *.tfstate.*
 *.tfplan
 crash.log
-# ignore *.tfvars only if they hold secrets
+# ignore *.tfvars only if they hold secrets (or only the secret ones, e.g. secrets.auto.tfvars)
 *.tfvars
+*.tfvars.json
 override.tf
 override.tf.json
 *_override.tf
@@ -375,11 +318,13 @@ terraform/
     └── prod/
 ```
 
-**2. Workspaces** - same code, one state file per workspace (`terraform workspace new dev`). Simple, but all envs share the same code and backend config, and it's easy to apply to the wrong one. Fine for short-lived or near-identical envs, not ideal for strict prod isolation.
+**2. Workspaces** - same code, one state file per workspace (`terraform workspace new dev`). Simple, but all envs share the same code and backend config, and it's easy to apply to the wrong one. Fine for short-lived or near-identical envs, not ideal for strict prod isolation (full pros/cons → [02 › Workspaces](02-Terraform_State.md)).
 
 **3. Same code + per-env tfvars** - `terraform apply -var-file=dev.tfvars`, with a separate backend for each env (`init -backend-config=dev.backend.hcl`).
 
-**4. Tooling / platforms** - Terragrunt (keeps env configs DRY) or HCP Terraform workspaces linked to VCS branches/directories.
+**4. Tooling / platforms** - Terragrunt (keeps env configs DRY) or HCP Terraform workspaces linked to VCS branches/directories. HCP Terraform sets variables per workspace, and **variable sets** share common values across workspaces.
+
+**5. CI/CD pipelines** - inject values as `TF_VAR_<name>` env vars. Secrets come from Key Vault or the pipeline's secret store, never from committed `.tfvars`.
 
 Large orgs also split state by **layer** (network → shared services → apps), so a change to an app never touches the network's state.
 
