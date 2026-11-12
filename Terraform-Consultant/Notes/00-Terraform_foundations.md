@@ -111,11 +111,15 @@ terraform plan -out=myplan.tfplan
 ## Resource Graph (DAG)
 So what actually happens when you run `terraform plan`?
 - Terraform automatically builds a dependency graph from your configuration to determine the order in which to create, update, or destroy resources
+- **DAG = Directed Acyclic Graph** - each resource is a node, each dependency is a one-way edge ("A depends on B"), and there are no cycles (A → B → A is an error: `Cycle: ...`)
+- **How Terraform builds it** - edges come from exactly two sources:
+  1. **Implicit dependencies** - an attribute reference in an argument, e.g. `subnet_id = azurerm_subnet.web.id` adds the edge VM → Subnet
+  2. **Explicit dependencies** - `depends_on = [azurerm_xxx.yyy]`, for dependencies Terraform can't see from references
 - Resource order in your `.tf` files doesn't matter
 - The resource graph is how Terraform achieves parallel execution
 - Foundation for understanding resource dependencies
 
-**Key Concept:** The graph is built from resource references - when one resource refers to another's attributes, Terraform automatically creates a dependency.
+**Key Concept:** The graph is built from dependencies - implicit (one resource references another's attributes) and explicit (`depends_on`). No reference and no `depends_on` = no edge, so the two resources run in parallel.
 
 Example graph (arrows point to what a resource depends on):
 ```
